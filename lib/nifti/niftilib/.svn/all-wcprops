@@ -1,0 +1,29 @@
+K 25
+svn:wc:ra_dav:version-url
+V 53
+/forge/utilzregAdvanced/!svn/ver/1/lib/nifti/niftilib
+END
+nifti1_io.h
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/forge/utilzregAdvanced/!svn/ver/1/lib/nifti/niftilib/nifti1_io.h
+END
+CMakeLists.txt
+K 25
+svn:wc:ra_dav:version-url
+V 68
+/forge/utilzregAdvanced/!svn/ver/1/lib/nifti/niftilib/CMakeLists.txt
+END
+nifti1.h
+K 25
+svn:wc:ra_dav:version-url
+V 62
+/forge/utilzregAdvanced/!svn/ver/1/lib/nifti/niftilib/nifti1.h
+END
+nifti1_io.c
+K 25
+svn:wc:ra_dav:version-url
+V 65
+/forge/utilzregAdvanced/!svn/ver/1/lib/nifti/niftilib/nifti1_io.c
+END

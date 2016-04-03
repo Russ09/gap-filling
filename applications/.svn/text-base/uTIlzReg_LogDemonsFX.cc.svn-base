@@ -1,0 +1,186 @@
+/*=========================================================================
+  Date      : $Date: 04.01.2011$
+=========================================================================*/
+
+#include <LogDemonsFX.h>
+
+void usage(){
+  cerr << "Usage: largedeformationLogDemons  <options>\n";
+  cerr << "Where <options> are one or more of the following:\n";
+  cerr << "  Mandatory option (one of those):\n";
+  cerr << "    <-ImageRegistration [Source][Target]>\n";
+  cerr << "    <-CptLogDeformation [SrcDefX][SrcDefY][SrcDefZ] [TrgDefX][TrgDefY][TrgDefZ]>\n";
+  cerr << "  Primary options:\n";
+  cerr << "    <-iterations n>             Number of iterations (default=10)\n";
+  cerr << "    <-subdivisions n>           Number of subdivisons between t=0 and t=1 (default=10)\n";
+  cerr << "    <-MaxVeloUpdt n>            Size of the maximum updates of the vector field (Default=0.5 voxels)\n";
+  cerr << "    <-alpha n>                  Weight of the norm in the cost function (Default=0.001)\n";
+  cerr << "  Kernels (Default: -sigma 3):\n";
+  cerr << "    <-Gauss n>                  Gaussian kernel of std. dev. Sigma (in voxels)\n";
+  cerr << "    <-M_Gauss n>                Sum of Gaussian kernels (max 4) -- n = k W1 S1 ... Wk Sk   (k=[#kernels], W.=weight, S.=Sigma)\n" ;
+  cerr << "  Inputs and Outputs:\n";
+  cerr << "    <-PrefixOutputs n>          Prefix of the output files (default=\"Outputs\")\n";
+  cerr << "  Secondary options:\n";
+  cerr << "    <-indicatorLimiter n>       UpWind -> 0, MinMod -> 1 (default), SuperBee -> 2  \n";
+  cerr << "    <-margins n>                Margin of the image where the calculations are reduced  (default=3 voxels)\n";
+  cerr << "    <-GreyLevAlign n>           Grey level linear alignment of each channel -- n = [Padding Src] [Padding Trg]\n";
+  exit(1);
+}
+
+int main(int argc, char **argv){
+  bool ok;
+  LogDemons Shoot;
+  int temp;
+  
+  
+  
+  
+  
+  
+  
+  // Check command line
+  if (argc < 4) 
+  {
+    usage();
+  }
+
+  // read mandatory parameters
+  if (strcmp(argv[1], "-ImageRegistration") == 0) {
+    argc--;  argv++;
+    strcpy(Shoot.SourceImageName,argv[1]);
+    argc--;  argv++;
+    strcpy(Shoot.TargetImageName,argv[1]);
+    argc--;  argv++;
+  	Shoot.IndicatorDiffeoTarget=0;
+    Shoot.NbChannels=1;
+  }
+  else {
+    argc--;  argv++;
+    strcpy(Shoot.SourceDefoX,argv[1]);
+    argc--;  argv++;
+    strcpy(Shoot.SourceDefoY,argv[1]);
+    argc--;  argv++;
+    strcpy(Shoot.SourceDefoZ,argv[1]);
+    argc--;  argv++;
+    strcpy(Shoot.TargetDefoX,argv[1]);
+    argc--;  argv++;
+    strcpy(Shoot.TargetDefoY,argv[1]);
+    argc--;  argv++;
+    strcpy(Shoot.TargetDefoZ,argv[1]);
+    argc--;  argv++;
+    Shoot.NbChannels=3;
+  	Shoot.IndicatorDiffeoTarget=1;
+  }
+  
+  
+  // Parse remaining parameters
+  while (argc > 1) {
+    //1 - Primary options
+    ok = false;
+    if ((ok == false) && (strcmp(argv[1], "-subdivisions") == 0)) {
+      argc--; argv++;
+      Shoot.NbTimes = atoi(argv[1]);
+      if (Shoot.NbTimes<2) Shoot.NbTimes=2;
+      argc--; argv++;
+      ok = true;
+    }
+	if ((ok == false) && (strcmp(argv[1], "-PrefixOutputs") == 0)) {
+      argc--; argv++;
+      strcpy(Shoot.PrefixOutputs,argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-iterations") == 0)) {
+      argc--; argv++;
+      Shoot.NbIter = atoi(argv[1]);
+      if (Shoot.NbIter<0) Shoot.NbIter=0;
+      argc--; argv++;
+      ok = true;
+    }
+
+    if ((ok == false) && (strcmp(argv[1], "-Gauss") == 0)) {
+      argc--; argv++;
+      Shoot.sigmaX1 = atof(argv[1]);
+      Shoot.sigmaY1 = atof(argv[1]);
+      Shoot.sigmaZ1 = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-M_Gauss") == 0)) {
+      argc--; argv++;
+      temp= atoi(argv[1]);
+      argc--; argv++;
+      if (temp>=1){
+        Shoot.weight1 = atof(argv[1]);
+        argc--; argv++;
+        Shoot.sigmaX1 = atof(argv[1]); Shoot.sigmaY1 = atof(argv[1]); Shoot.sigmaZ1 = atof(argv[1]);
+        argc--; argv++;
+      }
+      if (temp>=2){
+        Shoot.weight2 = atof(argv[1]);
+        argc--; argv++;
+        Shoot.sigmaX2 = atof(argv[1]); Shoot.sigmaY2 = atof(argv[1]); Shoot.sigmaZ2 = atof(argv[1]);
+        argc--; argv++;
+      }
+      if (temp>=3){
+        Shoot.weight3 = atof(argv[1]);
+        argc--; argv++;
+        Shoot.sigmaX3 = atof(argv[1]); Shoot.sigmaY3 = atof(argv[1]); Shoot.sigmaZ3 = atof(argv[1]);
+        argc--; argv++;
+      }
+      if (temp>=4){
+        Shoot.weight4 = atof(argv[1]);
+        argc--; argv++;
+        Shoot.sigmaX4 = atof(argv[1]); Shoot.sigmaY4 = atof(argv[1]); Shoot.sigmaZ4 = atof(argv[1]);
+        argc--; argv++;
+      }
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-alpha") == 0)) {
+      argc--; argv++;
+      Shoot.alpha = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-MaxVeloUpdt") == 0)) {
+      argc--; argv++;
+	  Shoot.MaxUpdate = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+	if ((ok == false) && (strcmp(argv[1], "-indicatorLimiter") == 0)) {
+      argc--; argv++;
+	  Shoot.indicatorLimiter = atoi(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+	if ((ok == false) && (strcmp(argv[1], "-margins") == 0)) {
+      argc--; argv++;
+      Shoot.Margin = atoi(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+	if ((ok == false) && (strcmp(argv[1], "-GreyLevAlign") == 0)) {
+      argc--; argv++;
+      Shoot.GreyLevAlign = 1;
+      Shoot.GLA_Padding_Src = atof(argv[1]);
+      argc--; argv++;
+      Shoot.GLA_Padding_Trg = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+	if (ok == false) 
+	{
+		usage();
+	}
+  }
+  
+  //run process
+  cout << "Log Demons registration using geodesic shooting... \n"; cout.flush();
+  Shoot.Run();
+  cout << "done" << endl;
+
+  return 0;
+}
+
+

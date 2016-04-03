@@ -1,0 +1,137 @@
+/*=========================================================================
+ 
+ Date      : $Date: 29.04.2010$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#ifndef _IRTKLDDMMSPLINES_H
+#define _IRTKLDDMMSPLINES_H
+
+#include <SciCalcPack.h>
+
+
+/**
+ * Class for Large Deformation registration using Beg 05's technique
+ */
+
+class LDDMM_Splines{
+private:
+  
+protected:
+  /// Function to launch the default calculations
+  virtual void Run_Default();
+  
+  /// functions to perform the registration
+  virtual void AllocateAllVariables();
+  virtual void ReadAndTreatInputImages();
+  virtual void ComputeEnergyGradient(int,int);
+  virtual float UpdateVelocityField(int);
+  virtual void SaveResultGradientDescent();
+  virtual void ReInitiateConvolver_HomoAppaWeights();
+  
+  ///functions to save and load various structures
+  virtual void LoadVelocityFields(char *);
+  virtual void SaveVelocityFields(char *);
+  virtual void SaveProjMomentum(char *);
+  virtual void SaveDeformations(char *);
+  virtual void SaveFlowLength(VectorField *,VectorField *,char *,char *);
+  virtual void SaveEvoFlowLength(VectorField *,VectorField *,char *,char *);
+  virtual void SaveVecDeformation(char *);
+  virtual void SaveInvVecDeformation(char *);
+  virtual void SaveGlobalFlowLength(char *);
+  virtual void SaveDetJacobian(char *);
+  
+  /// Protected parameters
+  //scalar and vector fields
+  ScalarField * ImTemplate;   //3D image  * [nb channels]
+  ScalarField * ImTarget;     //3D image  * [nb channels]
+  ScalarField J0;           //projection of 'ImTemplate' at a time between 0 and 1
+  ScalarField J1;           //projection of 'ImTarget' at a time between 0 and 1
+  VectorField GradJ;
+  ScalarField DetJacobians;
+  VectorField ForwardMapping;
+  VectorField BackwardMapping;
+  VectorField VelocityField;
+  VectorField GradE;
+  
+  //to learn something or use a learned matrix
+  BS_GlobalConvolver BSGconvolver;
+  
+  //gray level changes
+  float MinGrayLevel;
+  float MaxGrayLevel;
+  
+  //Quaternion to convert target coordinates into template (=source) coordinates
+  float Template2TargetCoord[4][4];
+
+  
+  //size of the fields
+  int NX;
+  int NY;
+  int NZ;
+  int NT;
+  
+  //fft convolver (to smooth the images)
+  LightFFTconvolver3D FFTconvolver;
+  
+public:
+  
+  /// Constructor
+  LDDMM_Splines();
+  
+  /// Destructor
+  ~LDDMM_Splines();
+  
+  /// Run  Large Deformation registration
+  virtual void Run();
+  
+  ///Function to return the RefMaxGrad which would be automatically tuned using the Run function (works only on the 1st channel)
+  virtual float ReturnRefMaxGrad();
+  
+  /// public Parameters
+  int iteration_nb;              //number of iterations 
+  int NbTimeSubdiv;              //Number of subdivision of virtual time steps
+  float MaxVelocityUpdate;       //Maximum allowed velocity update at each subdivision and iteration (in voxels)
+  float RefMaxGrad;              //Reference update gradient (typically the value of MaxGrad at the 1st iteration)
+  float UpdtMultFactor;          //To impose a multiplicatory factor on the update forces convergence if >0. (default=-1.)
+  float DeltaTimeSubdiv;         //time step between two subdivision
+  int Margin;                    //Margin of the image in voxels where the calculations are reduced
+  float weight1,sigmaX1,sigmaY1,sigmaZ1; //std. dev. of the 1st Gaussian kernel in direction x,y,z
+  float weight2,sigmaX2,sigmaY2,sigmaZ2; //std. dev. of the 2nd Gaussian kernel in direction x,y,z
+  float weight3,sigmaX3,sigmaY3,sigmaZ3; //std. dev. of the 3rd Gaussian kernel in direction x,y,z
+  float weight4,sigmaX4,sigmaY4,sigmaZ4; //std. dev. of the 4th Gaussian kernel in direction x,y,z
+  float weight5,sigmaX5,sigmaY5,sigmaZ5; //std. dev. of the 5th Gaussian kernel in direction x,y,z
+  float weight6,sigmaX6,sigmaY6,sigmaZ6; //std. dev. of the 6th Gaussian kernel in direction x,y,z
+  float weight7,sigmaX7,sigmaY7,sigmaZ7; //std. dev. of the 7th Gaussian kernel in direction x,y,z
+  int NbKernels;
+  int GridStep;
+  float GridSigmaX,GridSigmaY,GridSigmaZ;
+  int NbChannels;
+  int MeasureTypicAmp;
+  float weightChannel[100];          //weight on each channel
+  float VFmultFactor;                //Factor multiplying the estimated velocity field at each iteration
+  int FlowLength;                    //Save Length of the deformation flow from each voxel if .==1
+  int DetJacobian;                   //Save Determinant of the Jacobian at each voxel if .==1
+  int FinalDefVec;                   //Save Vector field of the estimated deformation from [Source] to [Target] if .==1
+  int FinalDefInvVec;                //Save Vector field of the estimated deformation from [Target] to [Source] if .==1
+  int ShowSSD;                       //Show the evolution of the Sum of Squared Differences at t=1
+  char PrefixInputs[256];            //Prefix of the files containing an initial velocity field
+  char PrefixOutputs[256];           //Prefix of the files containing the final velocity field
+  char SourceFiles[100][256];        //name of the file containing the source images (up to 100 channels)
+  char TargetFiles[100][256];        //name of the file containing the target images (up to 100 channels)
+  float World_Target2Template[4][4]; // in the world domain, affine registration that matches the target image to the template (source) image
+  float x_mm,y_mm,z_mm;              //voxel size in mm
+  int Importing_M;                   //If == 1: M is imported 
+  char M_File[256];                  //file containing the matrix M which can be used to initiate BSGconvolver (if Importing_M==1)
+  SquareMatrix *  RefMatrixM;      //pointer to a matrix M which can be used to initiate BSGconvolver (if Importing_M==2)
+  int Output_Deformation;
+  int Output_VelocityField;
+  int Output_ProjMomentum;
+  
+
+
+};
+
+
+#endif

@@ -1,0 +1,2054 @@
+/*=========================================================================
+ 
+ Date      : $Date: 29.04.2010$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#include <LDDMM_Beg.h>
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                   CONSTRUCTOR AND DESTRUCTOR
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+LargeDefGradLagrange::LargeDefGradLagrange(void){
+  int i;
+  
+  //default parameters
+  epsilon=0.2;
+  iteration_nb=10;
+  NbTimeSubdiv=10;
+  MaxVelocityUpdate=0.4;  //rem: Delta Voxels = 1
+  weight1=100.; sigmaX1=1.;  sigmaY1=1.;  sigmaZ1=1.;
+  weight2=0.;   sigmaX2=-1.; sigmaY2=-1.; sigmaZ2=-1.;
+  weight3=0.;   sigmaX3=-1.; sigmaY3=-1.; sigmaZ3=-1.;
+  weight4=0.;   sigmaX4=-1.; sigmaY4=-1.; sigmaZ4=-1.;
+  weight5=0.;   sigmaX5=-1.; sigmaY5=-1.; sigmaZ5=-1.;
+  weight6=0.;   sigmaX6=-1.; sigmaY6=-1.; sigmaZ6=-1.;
+  weight7=0.;   sigmaX7=-1.; sigmaY7=-1.; sigmaZ7=-1.;
+  NbKernels=1;
+  SplitKernels=0;
+  symmetric=0;
+  TranslatEstim=0;
+  SimuMetamorphosis=0;
+  Margin=0;
+  WghtVelField=0.000001; //previously 1
+  RefMaxGrad=-1.;
+  GreyLevAlign=0;
+  GLA_Padding_Src=-1.;
+  GLA_Padding_Trg=-1.;
+  FlowLength=0;
+  DetJacobian=0;
+  FinalDefVec=0;
+  FinalDefInvVec=0;
+  CptInitMomentum=0;
+  ShowSSD=0;
+  DivFreeSigma=-1;
+  strcpy(PrefixInputs,"Null");
+  strcpy(PrefixOutputs,"Outputs");
+  strcpy(MaskFile,"Null");
+  for (i=0;i<100;i++) strcpy(SourceFiles[i],"Null");
+  for (i=0;i<100;i++) strcpy(TargetFiles[i],"Null");
+  for (i=0;i<100;i++) weightChannel[i]=1.;
+  NbChannels=0;
+  MeasureTypicAmp=0;
+  World_Target2Template[0][0]=1; World_Target2Template[0][1]=0;   World_Target2Template[0][2]=0;    World_Target2Template[0][3]=0;   
+  World_Target2Template[1][0]=0; World_Target2Template[1][1]=1;   World_Target2Template[1][2]=0;    World_Target2Template[1][3]=0;   
+  World_Target2Template[2][0]=0; World_Target2Template[2][1]=0;   World_Target2Template[2][2]=1;    World_Target2Template[2][3]=0;   
+  World_Target2Template[3][0]=0; World_Target2Template[3][1]=0;   World_Target2Template[3][2]=0;    World_Target2Template[3][3]=1; 
+  x_mm=1;
+  y_mm=1;
+  y_mm=1;
+  Max_Update_Translation=0.05;  //orig 0.3
+  Max_Update_LogRotation=0.01;  //orig 0.03
+}
+
+LargeDefGradLagrange::~LargeDefGradLagrange(void){}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                        SUB-FUNCTIONS TO PERFORM THE REGISTRATION
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///initiate the gradient descent (Beg 2005) for the current 3D image of the 4D time sequence
+void LargeDefGradLagrange::ReadAndTreatInputImages(void){
+  int x, y, z;
+  int DistClosestEdge;
+  int i,j;
+  double mean1,mean2,std1,std2;
+  ScalarField Mask;
+  float tempQuat[4][4];
+  float World_Template2Target[4][4];
+
+  //1) CREATE THE SOURCE AND TARGET IMAGES 3D *[Nb Channels] FOR THE CALCULATIONS
+  //    -->  ImTemplate[c].G(x,y,z) = gray level of the c'th template channel at (x,y,z)
+  //    -->  ImTarget[c].G(x,y,z)  = gray level of the c'th target channel at (x,y,z)
+  this->ImTemplate = new ScalarField [this->NbChannels];
+  this->ImTarget = new ScalarField [this->NbChannels];
+  
+  //2) READ INPUTS
+  for (i=0;i<this->NbChannels;i++){
+    //2.1) read files
+    ImTemplate[i].Read(this->SourceFiles[i]);
+    ImTarget[i].Read(this->TargetFiles[i]);
+    
+    //2.2) check whether  3D or 2D images are opened
+    if (ImTemplate[i].NT>1) cout << "Source image " << i << " depends on time!!!";
+    if (ImTarget[i].NT>1) cout << "Target image " << i << " depends on time!!!";
+    
+    //2.3) check whether the template channels have the same size
+    if (i>0){
+      if ((ImTemplate[i].NX!=ImTemplate[i-1].NX)) cout << "Templates " << i << " and " << i-1 << " do not have the same size!!!";
+      if ((ImTemplate[i].NY!=ImTemplate[i-1].NY)) cout << "Templates " << i << " and " << i-1 << " do not have the same size!!!";
+      if ((ImTemplate[i].NZ!=ImTemplate[i-1].NZ)) cout << "Templates " << i << " and " << i-1 << " do not have the same size!!!";
+    }
+    
+    //2.4) check whether the target channels have the same size
+    if (i>0){
+      if ((ImTarget[i].NX!=ImTarget[i-1].NX)) cout << "Targets " << i << " and " << i-1 << " do not have the same size!!!";
+      if ((ImTarget[i].NY!=ImTarget[i-1].NY)) cout << "Targets " << i << " and " << i-1 << " do not have the same size!!!";
+      if ((ImTarget[i].NZ!=ImTarget[i-1].NZ)) cout << "Targets " << i << " and " << i-1 << " do not have the same size!!!";
+    }
+  }
+  
+  //2.5) variables containing the size of the image
+  this->NX=ImTemplate[0].NX;
+  this->NY=ImTemplate[0].NY;
+  this->NZ=ImTemplate[0].NZ;
+  this->NT=1;
+  
+  cout << "Image size: " << this->NX << "*" << this->NY << "*" << this->NZ << " (target: " << this->ImTarget[0].NX <<  "*"  <<  this->ImTarget[0].NY  <<  "*"  << this->ImTarget[0].NZ  << ")\n";
+  
+  
+  //2.6) compute the quaternion to convert target coordinates into template coordinates
+  
+  invert_4t4quaternion(this->World_Target2Template,World_Template2Target);
+  
+  mult_quat4t4mat_quat4t4mat(World_Template2Target,ImTemplate[0].Image2World,tempQuat);
+  mult_quat4t4mat_quat4t4mat(ImTarget[0].World2Image,tempQuat,Template2TargetCoord);
+  
+  cout << endl;
+  cout << "Template to target:" << endl;
+  for (i=0;i<4;i++){
+    for (j=0;j<4;j++){
+      cout << Template2TargetCoord[i][j] << " ";
+    }
+    cout << endl;
+  }
+  
+  //... save the original quaternion in case they evolve during the iterations
+  if (TranslatEstim==1){
+    for (i=0;i<4;i++) for (j=0;j<4;j++) this->Original_World_Target2Template[i][j]=this->World_Target2Template[i][j];
+  }
+  
+  //2.7 compute the voxels size in mm
+  this->x_mm=sqrt(ImTemplate[0].Image2World[0][0]*ImTemplate[0].Image2World[0][0]+ImTemplate[0].Image2World[0][1]*ImTemplate[0].Image2World[0][1]+ImTemplate[0].Image2World[0][2]*ImTemplate[0].Image2World[0][2]);
+  this->y_mm=sqrt(ImTemplate[0].Image2World[1][0]*ImTemplate[0].Image2World[1][0]+ImTemplate[0].Image2World[1][1]*ImTemplate[0].Image2World[1][1]+ImTemplate[0].Image2World[1][2]*ImTemplate[0].Image2World[1][2]);
+  this->z_mm=sqrt(ImTemplate[0].Image2World[2][0]*ImTemplate[0].Image2World[2][0]+ImTemplate[0].Image2World[2][1]*ImTemplate[0].Image2World[2][1]+ImTemplate[0].Image2World[2][2]*ImTemplate[0].Image2World[2][2]);
+  
+  cout << endl;
+  cout << "Template image resolution: " << this->x_mm << " "  << this->y_mm << " "  << this->z_mm << endl;
+  
+  //2.8 convert the sigmas from mm to voxels
+  this->sigmaX1=this->sigmaX1/x_mm;  this->sigmaY1=this->sigmaY1/y_mm;  this->sigmaZ1=this->sigmaZ1/z_mm;
+  this->sigmaX2=this->sigmaX2/x_mm;  this->sigmaY2=this->sigmaY2/y_mm;  this->sigmaZ2=this->sigmaZ2/z_mm;
+  this->sigmaX3=this->sigmaX3/x_mm;  this->sigmaY3=this->sigmaY3/y_mm;  this->sigmaZ3=this->sigmaZ3/z_mm;
+  this->sigmaX4=this->sigmaX4/x_mm;  this->sigmaY4=this->sigmaY4/y_mm;  this->sigmaZ4=this->sigmaZ4/z_mm;
+  this->sigmaX5=this->sigmaX5/x_mm;  this->sigmaY5=this->sigmaY5/y_mm;  this->sigmaZ5=this->sigmaZ5/z_mm;
+  this->sigmaX6=this->sigmaX6/x_mm;  this->sigmaY6=this->sigmaY6/y_mm;  this->sigmaZ6=this->sigmaZ6/z_mm;
+  this->sigmaX7=this->sigmaX7/x_mm;  this->sigmaY7=this->sigmaY7/y_mm;  this->sigmaZ7=this->sigmaZ7/z_mm;
+  
+  if (this->DivFreeSigma>0) this->DivFreeSigma=this->DivFreeSigma/x_mm;
+  
+  //3) CREATE THE MASK
+  if (strcmp(this->MaskFile,"Null")!=0){
+    //read the mask
+    Mask.Read(this->MaskFile);
+    
+    if ((ImTemplate[0].NX!=Mask.NX)) cout << "The image(s) and the mask do not have the same size!!!";
+    if ((ImTemplate[0].NY!=Mask.NY)) cout << "The image(s) and the mask do not have the same size!!!";
+    if ((ImTemplate[0].NZ!=Mask.NZ)) cout << "The image(s) and the mask do not have the same size!!!";
+    
+    //mask the image
+    for (i=0;i<this->NbChannels;i++){
+      for(z=0;z<this->NZ;z++) for(y=0;y<this->NY;y++) for(x=0;x<this->NX;x++) if (Mask.G(x,y,z)<0.001)
+        this->ImTemplate[i].P(0.,x,y,z);
+      
+      for(z=0;z<this->NZ;z++) for(y=0;y<this->NY;y++) for(x=0;x<this->NX;x++) if (Mask.G(x,y,z)<0.001)
+        this->ImTarget[i].P(0.,x,y,z);
+    }
+  }  
+  
+  //4) LINEAR ALIGNMENT OF THE GREY LEVELS OF ImTarget ON THOSE OF ImTemplate
+  float PaddingValue;
+  int NbVoxelsOK;
+  PaddingValue=10;
+  
+  if (GreyLevAlign!=0) for (i=0;i<this->NbChannels;i++){
+    //compute mean and std dev of the source and target images
+    mean1=0.;
+    NbVoxelsOK=0;
+    for (z = this->Margin; z < this->NZ-this->Margin; z++)  for (y = this->Margin; y < this->NY-this->Margin; y++) for (x = this->Margin; x < this->NX-this->Margin; x++) if (this->ImTemplate[i].G(x,y,z)>GLA_Padding_Src){
+      mean1+=(double)this->ImTemplate[i].G(x,y,z);
+      NbVoxelsOK++;
+    }
+    mean1/=(double)(NbVoxelsOK);
+    
+    mean2=0.;
+    NbVoxelsOK=0;
+    for (z = this->Margin; z < this->ImTarget[0].NZ-this->Margin; z++)  for (y = this->Margin; y < this->ImTarget[0].NY-this->Margin; y++) for (x = this->Margin-this->Margin; x < this->ImTarget[0].NX; x++) if (this->ImTarget[i].G(x,y,z)>GLA_Padding_Trg){
+      mean2+=(double)this->ImTarget[i].G(x,y,z);
+      NbVoxelsOK++;
+    }
+    mean2/=(double)(NbVoxelsOK);
+    
+    std1=0.;
+    NbVoxelsOK=0;
+    for (z = this->Margin; z < this->NZ-this->Margin; z++)  for (y = this->Margin; y < this->NY-this->Margin; y++) for (x = this->Margin; x < this->NX-this->Margin; x++) if (this->ImTemplate[i].G(x,y,z)>GLA_Padding_Src){
+      std1+=pow((double)this->ImTemplate[i].G(x,y,z)-mean1,2.);
+      NbVoxelsOK++;
+    }
+    std1/=(double)(NbVoxelsOK);
+    std1=sqrt(std1);
+    
+    std2=0.;
+    NbVoxelsOK=0;
+    for (z = this->Margin; z < this->ImTarget[0].NZ-this->Margin; z++)  for (y = this->Margin; y < this->ImTarget[0].NY-this->Margin; y++) for (x = this->Margin; x < this->ImTarget[0].NX-this->Margin; x++) if (this->ImTarget[i].G(x,y,z)>GLA_Padding_Trg){
+      std2+=pow((double)this->ImTarget[i].G(x,y,z)-mean2,2.);
+      NbVoxelsOK++;
+    }
+    std2/=(double)(NbVoxelsOK);
+    std2=sqrt(std2);
+    
+    cout << "Template: mean=" << mean1 << ", stddev=" << std1 << ".    Target: mean=" << mean2 << ", stddev=" << std2 << "\n";
+    
+    
+    for (z = 0; z < this->ImTarget[0].NZ; z++)  for (y = 0; y < this->ImTarget[0].NY; y++) for (x = 0; x < this->ImTarget[0].NX; x++)
+      this->ImTarget[i].P((this->ImTarget[i].G(x,y,z)-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1,x,y,z);
+    
+    
+    for (z = 0; z < this->ImTarget[0].NZ; z++)  for (y = 0; y < this->ImTarget[0].NY; y++) for (x = 0; x < this->ImTarget[0].NX; x++)
+      if ((this->ImTarget[i].G(x,y,z)<(GLA_Padding_Trg-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1)||(this->ImTarget[i].G(x,y,z)<GLA_Padding_Src))
+        this->ImTarget[i].P(0.,x,y,z);
+  }
+  
+  //this->ImTarget[0].Write("TrgNew.nii",this->SourceFiles[0]);
+  //this->ImTemplate[0].Write("SrcNew.nii",this->SourceFiles[0]);
+  
+  
+  //5) normalize the weight of the different scales
+  float sumWgt;
+  
+  if (fabs(this->weight1)>0.01){   //note: automatic tuning of the weights later if this->weight1==0
+    sumWgt=this->weight1+this->weight2+this->weight3+this->weight4+this->weight5+this->weight6+this->weight7;
+    
+    this->weight1/=sumWgt;
+    this->weight2/=sumWgt;
+    this->weight3/=sumWgt;
+    this->weight4/=sumWgt;
+    this->weight5/=sumWgt;
+    this->weight6/=sumWgt;
+    this->weight7/=sumWgt;
+  }
+
+}
+
+
+///allocate all variables used for the gradient descent (Beg 2005) of the current 3D image from the treated 4D time sequence.
+///Compute also the dimension of the scalar and vector fields in use
+void LargeDefGradLagrange::AllocateAllVariables(void){
+  int i,j,k;
+  
+  //time step between two subdivision
+  this->DeltaTimeSubdiv=1./(static_cast<float>(NbTimeSubdiv-1));
+  
+  //4) initiate the velocity field
+  //... velocity field
+  //    -->  VelocityField.G(0,x,y,z,i)= direction ex of the vector at (x,y,z)
+  //    -->  VelocityField.G(1,x,y,z,i)= direction ey of the vector at (x,y,z)
+  //    -->  VelocityField.G(2,x,y,z,i)= direction ez of the vector at (x,y,z)
+  //    -->  where n is the id of the velocity field
+  if (strcmp(PrefixInputs,"Null")!=0)
+    this->LoadVelocityFields(PrefixInputs);  //NbTimeSubdiv should be checked
+  else
+    this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+  
+  
+  if (SplitKernels!=0){  //contribution of each kernel on the velocity field evaluated
+    this->SplittedVelocityField=new VectorField [this->NbKernels];
+    
+    if (strcmp(PrefixInputs,"Null")!=0){
+      this->LoadSplittedVelocityFields(PrefixInputs);  //NbTimeSubdiv should be checked
+    }
+    else{
+      for (i=0;i<this->NbKernels;i++ )
+        this->SplittedVelocityField[i].CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+    }
+  }
+  
+  //... forward mapping
+  //    -->  ForwardMapping.G(0,x,y,z,i) = coordinate x at time i corresponding to (x,y,z) at time 0
+  //    -->  ForwardMapping.G(1,x,y,z,i) = coordinate y at time i corresponding to (x,y,z) at time 0
+  //    -->  ForwardMapping.G(2,x,y,z,i) = coordinate z at time i corresponding to (x,y,z) at time 0
+  this->ForwardMapping.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+  
+  //... backward mapping
+  //    -->  BackwardMapping.G(0,x,y,z,i) = coordinate x at time i corresponding to (x,y,z) at time 1
+  //    -->  BackwardMapping.G(1,x,y,z,i) = coordinate y at time i corresponding to (x,y,z) at time 1
+  //    -->  BackwardMapping.G(2,x,y,z,i) = coordinate z at time i corresponding to (x,y,z) at time 1
+  this->BackwardMapping.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+  
+  //... temporary image transformed using the forward mapping from time 0
+  //    -->  J0.G(x,y,z) = gray level of the transformed image J0 at (x,y,z)
+  this->J0.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //... temporary image transformed using the backward mapping from time 1
+  //    -->  J1.G(x,y,z) = gray level of the transformed image J1 at (x,y,z)
+  this->J1.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //... gradient of J
+  //    -->  GradJ.G(0,x,y,z)= gradient of J0 in direction ex at (x,y,z)
+  //    -->  GradJ.G(1,x,y,z)= gradient of J0 in direction ey at (x,y,z)
+  //    -->  GradJ.G(2,x,y,z)= gradient of J0 in direction ez at (x,y,z)
+  this->GradJ.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //... determinent of the Jacobians  
+  //    -->  Jacobians.G(x,y,z)= determinant of the jacobian at (x,y,z)
+  this->DetJacobians.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //... Energy Gradient
+  //    -->  GradE.G(0,i,x,y,z) = Energy gradient at time i in direction ex at (x,y,z)
+  //    -->  GradE.G(1,i,x,y,z) = Energy gradient at time i in direction ey at (x,y,z)
+  //    -->  GradE.G(2,i,x,y,z) = Energy gradient at time i in direction ez at (x,y,z)
+  this->GradE.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+  
+  //temporary vector field (if matrix based smoothing is performed)
+  if (this->DivFreeSigma>0) this->TempVF.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  
+  //5) contribution of each kernel in the energy gradient
+  if (this->SplitKernels!=0){
+    this->SplittedGradE=new VectorField [this->NbKernels];
+    for (i=0;i<this->NbKernels;i++ )
+      this->SplittedGradE[i].CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+  }
+  
+  //6) Initiate the initial momentum
+  if (CptInitMomentum!=0){
+    if ((this->SplitKernels!=0)||(this->NbChannels!=1)){ 
+      //we can only compute the initial momentum when we have one channel and no splitted kernel (should be extended)
+      cout << "Sorry, we were too lazy to program the estimation of the initial momentum with several channels or splitted kernels!\n";
+      CptInitMomentum=0;
+    }
+    else{
+      GradInitialMomentum.CreateVoidField(this->NX,this->NY,this->NZ);
+      
+      if (strcmp(PrefixInputs,"Null")==0)
+        InitialMomentum.CreateVoidField(this->NX,this->NY,this->NZ);
+      else{
+        char ImName[256];
+        char Suffix[256];
+        strcpy(ImName,PrefixInputs);
+        strcpy(Suffix,"_InitMomentum.nii");
+        strcat(ImName,Suffix);
+        InitialMomentum.Read_and_Interpolate(ImName,this->NX,this->NY,this->NZ);
+      }
+    }
+  }
+
+  //7) Initiate the class to smooth the images
+  if (this->DivFreeSigma>0){//matrix valued convolution
+    FFTconvolver.InitiateMatrixValuedConvolver(this->NX,this->NY,this->NZ);
+  }
+  else{//standard convolution
+    FFTconvolver.InitiateConvolver(this->NX,this->NY,this->NZ,this->weight1,this->sigmaX1,this->sigmaY1,this->sigmaZ1,this->weight2,this->sigmaX2,this->sigmaY2,this->sigmaZ2,this->weight3,this->sigmaX3,this->sigmaY3,this->sigmaZ3,this->weight4,this->sigmaX4,this->sigmaY4,this->sigmaZ4,this->weight5,this->sigmaX5,this->sigmaY5,this->sigmaZ5,this->weight6,this->sigmaX6,this->sigmaY6,this->sigmaZ6,this->weight7,this->sigmaX7,this->sigmaY7,this->sigmaZ7);
+    
+    //... tune automatically the weigths and update the FFTconvolver is the easy tuning is active
+    if (fabs(this->weight1)<0.001) ReInitiateConvolver_HomoAppaWeights();
+  }
+  
+  //8) Initiate the translation and rotation temporal derivatives  (= velocities)
+  if ((this->TranslatEstim==1)&&(symmetric==1)){
+    cout << "The estimation of the translations has not been implemented in the context of symmetric registration" << endl;
+    this->TranslatEstim=0;
+  }
+  
+  if (this->TranslatEstim==1){
+    this->Current_Translat[0]=0; this->Current_Translat[1]=0; this->Current_Translat[2]=0; 
+    
+    this->Current_LogRotation[0][0]=0; this->Current_LogRotation[0][1]=0; this->Current_LogRotation[0][2]=0; 
+    this->Current_LogRotation[1][0]=0; this->Current_LogRotation[1][1]=0; this->Current_LogRotation[1][2]=0; 
+    this->Current_LogRotation[2][0]=0; this->Current_LogRotation[2][1]=0; this->Current_LogRotation[2][2]=0; 
+    
+    this->Current_Rotation[0][0]=1; this->Current_Rotation[0][1]=0; this->Current_Rotation[0][2]=0; 
+    this->Current_Rotation[1][0]=0; this->Current_Rotation[1][1]=1; this->Current_Rotation[1][2]=0; 
+    this->Current_Rotation[2][0]=0; this->Current_Rotation[2][1]=0; this->Current_Rotation[2][2]=1; 
+  }
+  
+}
+
+
+
+///Compute the energy gradients
+void LargeDefGradLagrange::ComputeEnergyGradient(int timeSubdiv,int IdChannel){
+  int x,y,z,i,k;
+  float temp;
+  
+  if (this->DivFreeSigma>0){  //CASE 1: DIVERGENCE FREE KERNEL
+    for (i=0;i<3;i++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      
+      if ((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1))
+        temp=0;
+      else 
+        temp=(this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z) * this->GradJ.G(i,x,y,z);
+      
+      this->TempVF.P(static_cast<float>(temp),i,x,y,z);
+    }
+      
+    
+    FFTconvolver.Convolution_DivergenceFreeFilter(&this->TempVF, this->DivFreeSigma);
+    
+    
+    for (i=0;i<3;i++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      
+      if ((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1))
+        temp=0;
+      else 
+        temp=(this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z) * this->GradJ.G(i,x,y,z);
+      
+      this->GradE.P(this->WghtVelField*2*this->VelocityField.G(i,x,y,z,timeSubdiv) - 2*this->TempVF.G(i,x,y,z),i,x,y,z,timeSubdiv);
+    }
+  }
+  else{
+    if (SplitKernels==0){  //CASE 2: NON-SPLITTED KERNEL
+      //    ScalarField Mask;  // TO REMOVE 
+      //Mask.Read("lesionD.nii");  // TO REMOVE 
+      //cout << "lddmm stuff" << endl; // TO REMOVE 
+  
+      //loop on the vector directions (x,y,z)
+      for (i=0;i<3;i++){
+        //compute the scalar field (one dimension out of the vector field) to smooth
+        for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+          if ((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1))
+            temp=0;
+          else 
+            temp=(this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z) * this->GradJ.G(i,x,y,z);
+          
+	  //if (Mask.G(x,y,z)<0.001) temp=0; // TO REMOVE 
+	  this->FFTconvolver.P(static_cast<float>(temp),x,y,z);
+        }
+        
+        //smooth the scalar field
+        FFTconvolver.Convolution();
+	
+	
+	//set the gradient of Energy...
+        if (IdChannel==0){//...first channel
+          for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+            this->GradE.P(this->WghtVelField*2*this->VelocityField.G(i,x,y,z,timeSubdiv) - 2*FFTconvolver.G(x,y,z),i,x,y,z,timeSubdiv);
+          }
+        }
+        else{//...other channels -> just update the values computed before
+          for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+            this->GradE.P(this->GradE.G(i,x,y,z,timeSubdiv)+weightChannel[IdChannel]*(- 2*FFTconvolver.G(x,y,z)),i,x,y,z,timeSubdiv);
+          }
+        }
+      }
+      
+      //computation of the initial momentum if asked
+      if (CptInitMomentum!=0) if (timeSubdiv==0){
+        for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+          if ((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1))
+            temp=0;
+          else 
+            temp=(this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z);
+          this->GradInitialMomentum.P(this->WghtVelField*2*this->InitialMomentum.G(x,y,z)-2*temp,x,y,z);
+        }
+      }
+      
+      
+    }
+    else{  //CASE 3: SPLITTED KERNEL
+      for (k=0;k<this->NbKernels;k++){
+        //2.1) define the kernel
+        if (k==0) this->FFTconvolver.ChangeKernel_SingleScale(this->weight1,this->sigmaX1,this->sigmaY1,this->sigmaZ1);
+        if (k==1) this->FFTconvolver.ChangeKernel_SingleScale(this->weight2,this->sigmaX2,this->sigmaY2,this->sigmaZ2);
+        if (k==2) this->FFTconvolver.ChangeKernel_SingleScale(this->weight3,this->sigmaX3,this->sigmaY3,this->sigmaZ3);
+        if (k==3) this->FFTconvolver.ChangeKernel_SingleScale(this->weight4,this->sigmaX4,this->sigmaY4,this->sigmaZ4);
+        if (k==4) this->FFTconvolver.ChangeKernel_SingleScale(this->weight5,this->sigmaX5,this->sigmaY5,this->sigmaZ5);
+        if (k==5) this->FFTconvolver.ChangeKernel_SingleScale(this->weight6,this->sigmaX6,this->sigmaY6,this->sigmaZ6);
+        if (k==6) this->FFTconvolver.ChangeKernel_SingleScale(this->weight7,this->sigmaX7,this->sigmaY7,this->sigmaZ7);
+        
+        //2.2) do the work like in case 1 for each kernel
+        //loop on the vector directions (x,y,z)
+        for (i=0;i<3;i++){
+          //compute the scalar field (one dimension out of the vector field) to smooth
+          for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+            if ((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1))
+              temp=0;
+            else 
+              temp=(this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z) * this->GradJ.G(i,x,y,z);
+            this->FFTconvolver.P(static_cast<float>(temp),x,y,z);
+          }
+          
+          //smooth the scalar field
+          FFTconvolver.Convolution();
+          
+          //set the gradient of Energy...
+          if (IdChannel==0){//...first channel  - rem: weightChannel[0]=1, so not expressed here
+            //splitted grad E
+            for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+              this->SplittedGradE[k].P(this->WghtVelField*2*this->SplittedVelocityField[k].G(i,x,y,z,timeSubdiv) - 2*FFTconvolver.G(x,y,z),i,x,y,z,timeSubdiv);
+            
+            //contribution to grad E
+            if (k==0){
+              for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+                this->GradE.P(this->WghtVelField*2*this->SplittedVelocityField[k].G(i,x,y,z,timeSubdiv) - 2*FFTconvolver.G(x,y,z),i,x,y,z,timeSubdiv);
+            }
+            else{
+              for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+                this->GradE.P(this->GradE.G(i,x,y,z,timeSubdiv)- 2*FFTconvolver.G(x,y,z),i,x,y,z,timeSubdiv);
+            }
+          }
+          else{//...other channels -> just update the values computed before
+            //splitted grad E
+            for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+              this->SplittedGradE[k].P(this->SplittedGradE[k].G(i,x,y,z,timeSubdiv)+weightChannel[IdChannel]*(-2*FFTconvolver.G(x,y,z)),i,x,y,z,timeSubdiv);
+            
+            //contribution to grad E
+            for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+              this->GradE.P(this->GradE.G(i,x,y,z,timeSubdiv)+weightChannel[IdChannel]*(-2*FFTconvolver.G(x,y,z)),i,x,y,z,timeSubdiv);
+          }
+        }
+      }
+    }
+  }
+}
+
+
+
+
+
+///Compute the translation gradients
+///should only be computed when (TimeSubdiv==this->NbTimeSubdiv-1)
+void LargeDefGradLagrange::CptUpdateTranslatVelo(int IdChannel){
+  float f;
+  float LocX[3];
+  float gI[3];
+  float LocDiamond[3][3];
+  float tempFl;
+  int x,y,z;
+  float TmpMat1[3][3];
+  float TmpMat2[3][3];
+  float TmpMat3[3][3];
+  float TmpMat4[3][3];
+  float TmpVec1[3];
+  float TmpVec2[3];
+  
+  //1) initiate default values (normaly useless)
+  this->Update_Translat[0]=0; this->Update_Translat[1]=0; this->Update_Translat[2]=0; 
+  
+  this->Update_LogRotation[0][0]=0; this->Update_LogRotation[0][1]=0; this->Update_LogRotation[0][2]=0; 
+  this->Update_LogRotation[1][0]=0; this->Update_LogRotation[1][1]=0; this->Update_LogRotation[1][2]=0; 
+  this->Update_LogRotation[2][0]=0; this->Update_LogRotation[2][1]=0; this->Update_LogRotation[2][2]=0; 
+  
+  //2) 3D images
+  if (this->NZ>1){
+    //2.1) compute the update vectors and matrices not yet multiplied by Current_LogRotation
+    tempFl=0;
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      if ((z>=this->Margin)||(z<=this->NZ-this->Margin-1)||(y>=this->Margin)||(y<=this->NY-this->Margin-1)||(x>=this->Margin)||(x<=this->NX-this->Margin-1)){
+        tempFl++;
+        //2.1.1) compute local parameters
+        f=this->J0.G(x,y,z)-this->J1.G(x,y,z);
+        
+        LocX[0]=this->ImTarget[0].Image2World[0][0]*x+this->ImTarget[0].Image2World[0][1]*y+this->ImTarget[0].Image2World[0][2]*z+this->ImTarget[0].Image2World[0][3];
+        LocX[1]=this->ImTarget[0].Image2World[1][0]*x+this->ImTarget[0].Image2World[1][1]*y+this->ImTarget[0].Image2World[1][2]*z+this->ImTarget[0].Image2World[1][3];
+        LocX[2]=this->ImTarget[0].Image2World[2][0]*x+this->ImTarget[0].Image2World[2][1]*y+this->ImTarget[0].Image2World[2][2]*z+this->ImTarget[0].Image2World[2][3];
+        
+        TmpVec1[0]=this->GradJ.G(0,x,y,z);
+        TmpVec1[1]=this->GradJ.G(1,x,y,z);
+        TmpVec1[2]=this->GradJ.G(2,x,y,z);
+        
+	gI[0]=this->ImTarget[0].Image2World[0][0]*TmpVec1[0]+this->ImTarget[0].Image2World[0][1]*TmpVec1[1]+this->ImTarget[0].Image2World[0][2]*TmpVec1[2];
+	gI[1]=this->ImTarget[0].Image2World[1][0]*TmpVec1[0]+this->ImTarget[0].Image2World[1][1]*TmpVec1[1]+this->ImTarget[0].Image2World[1][2]*TmpVec1[2];
+	gI[2]=this->ImTarget[0].Image2World[2][0]*TmpVec1[0]+this->ImTarget[0].Image2World[2][1]*TmpVec1[1]+this->ImTarget[0].Image2World[2][2]*TmpVec1[2];
+	
+        Diamond_R3(gI,LocX,LocDiamond);  //LocDiamond = -0.5  (gI \otimes LocX - LocX \otimes gI )
+        
+        //2.1.2) compute a part of the update rotation...
+	//... initial matrix
+        TmpMat1[0][0]=-f*LocDiamond[0][0]; TmpMat1[0][1]=-f*LocDiamond[0][1]; TmpMat1[0][2]=-f*LocDiamond[0][2]; 
+        TmpMat1[1][0]=-f*LocDiamond[1][0]; TmpMat1[1][1]=-f*LocDiamond[1][1]; TmpMat1[1][2]=-f*LocDiamond[1][2]; 
+        TmpMat1[2][0]=-f*LocDiamond[2][0]; TmpMat1[2][1]=-f*LocDiamond[2][1]; TmpMat1[2][2]=-f*LocDiamond[2][2]; 
+        
+	//... multiplications by Q
+	mult_3t3mat_3t3mat(this->Current_Rotation,TmpMat1, TmpMat2);
+	transpose_3t3matrix(this->Current_Rotation,TmpMat3);
+	mult_3t3mat_3t3mat(TmpMat2,TmpMat3,TmpMat4);
+	
+        this->Update_LogRotation[0][0]+=TmpMat4[0][0]; this->Update_LogRotation[0][1]+=TmpMat4[0][1]; this->Update_LogRotation[0][2]+=TmpMat4[0][2]; 
+        this->Update_LogRotation[1][0]+=TmpMat4[1][0]; this->Update_LogRotation[1][1]+=TmpMat4[1][1]; this->Update_LogRotation[1][2]+=TmpMat4[1][2]; 
+        this->Update_LogRotation[2][0]+=TmpMat4[2][0]; this->Update_LogRotation[2][1]+=TmpMat4[2][1]; this->Update_LogRotation[2][2]+=TmpMat4[2][2]; 
+        
+        //2.1.3) compute a part of the update update translation...
+	//... initial vector
+	TmpVec1[0]=f * this->GradJ.G(0,x,y,z);
+	TmpVec1[1]=f * this->GradJ.G(1,x,y,z);
+	TmpVec1[2]=f * this->GradJ.G(2,x,y,z);
+	
+	//... multiplication by Q
+	mult_3t3mat_3vec(this->Current_Rotation, TmpVec1, TmpVec2);
+	this->Update_Translat[0]+=TmpVec2[0];
+        this->Update_Translat[1]+=TmpVec2[1];
+        this->Update_Translat[2]+=TmpVec2[2];
+      }
+    }
+    
+    //2.1.4) divide by the number of voxels
+    this->Update_LogRotation[0][0]/=tempFl; this->Update_LogRotation[0][1]/=tempFl; this->Update_LogRotation[0][2]/=tempFl;
+    this->Update_LogRotation[1][0]/=tempFl; this->Update_LogRotation[1][1]/=tempFl; this->Update_LogRotation[1][2]/=tempFl;
+    this->Update_LogRotation[2][0]/=tempFl; this->Update_LogRotation[2][1]/=tempFl; this->Update_LogRotation[2][2]/=tempFl;
+    
+    this->Update_Translat[0]/=tempFl;
+    this->Update_Translat[1]/=tempFl;
+    this->Update_Translat[2]/=tempFl;
+  }
+  
+  //3) 2D images
+  if (this->NZ==1){
+    //3.1) compute the update vectors and matrices not yet multiplied by Current_LogRotation
+    tempFl=0;
+    for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      if ((y>=this->Margin)||(y<=this->NY-this->Margin-1)||(x>=this->Margin)||(x<=this->NX-this->Margin-1)){
+        tempFl++;
+        //3.1.1) compute local parameters
+        f=this->J0.G(x,y)-this->J1.G(x,y);
+        
+        LocX[0]=this->ImTarget[0].Image2World[0][0]*x+this->ImTarget[0].Image2World[0][1]*y+this->ImTarget[0].Image2World[0][3];
+        LocX[1]=this->ImTarget[0].Image2World[1][0]*x+this->ImTarget[0].Image2World[1][1]*y+this->ImTarget[0].Image2World[1][3];
+        LocX[2]=this->ImTarget[0].Image2World[2][0]*x+this->ImTarget[0].Image2World[2][1]*y+this->ImTarget[0].Image2World[2][3];
+        
+        TmpVec1[0]=this->GradJ.G(0,x,y);
+        TmpVec1[1]=this->GradJ.G(1,x,y);
+        TmpVec1[2]=this->GradJ.G(2,x,y);
+        
+	gI[0]=this->ImTarget[0].Image2World[0][0]*TmpVec1[0]+this->ImTarget[0].Image2World[0][1]*TmpVec1[1]+this->ImTarget[0].Image2World[0][2]*TmpVec1[2];
+	gI[1]=this->ImTarget[0].Image2World[1][0]*TmpVec1[0]+this->ImTarget[0].Image2World[1][1]*TmpVec1[1]+this->ImTarget[0].Image2World[1][2]*TmpVec1[2];
+	gI[2]=this->ImTarget[0].Image2World[2][0]*TmpVec1[0]+this->ImTarget[0].Image2World[2][1]*TmpVec1[1]+this->ImTarget[0].Image2World[2][2]*TmpVec1[2];
+	
+        Diamond_R3(gI,LocX,LocDiamond);  //LocDiamond = -0.5  (gI \otimes LocX - LocX \otimes gI )
+        
+        //3.1.2) compute a part of the update rotation...
+	//... initial matrix
+        TmpMat1[0][0]=-f*LocDiamond[0][0]; TmpMat1[0][1]=-f*LocDiamond[0][1]; TmpMat1[0][2]=-f*LocDiamond[0][2]; 
+        TmpMat1[1][0]=-f*LocDiamond[1][0]; TmpMat1[1][1]=-f*LocDiamond[1][1]; TmpMat1[1][2]=-f*LocDiamond[1][2]; 
+        TmpMat1[2][0]=-f*LocDiamond[2][0]; TmpMat1[2][1]=-f*LocDiamond[2][1]; TmpMat1[2][2]=-f*LocDiamond[2][2]; 
+        
+	//... multiplications by Q
+	mult_3t3mat_3t3mat(this->Current_Rotation,TmpMat1, TmpMat2);
+	transpose_3t3matrix(this->Current_Rotation,TmpMat3);
+	mult_3t3mat_3t3mat(TmpMat2,TmpMat3,TmpMat4);
+	
+        this->Update_LogRotation[0][0]+=TmpMat4[0][0]; this->Update_LogRotation[0][1]+=TmpMat4[0][1]; this->Update_LogRotation[0][2]+=TmpMat4[0][2]; 
+        this->Update_LogRotation[1][0]+=TmpMat4[1][0]; this->Update_LogRotation[1][1]+=TmpMat4[1][1]; this->Update_LogRotation[1][2]+=TmpMat4[1][2]; 
+        this->Update_LogRotation[2][0]+=TmpMat4[2][0]; this->Update_LogRotation[2][1]+=TmpMat4[2][1]; this->Update_LogRotation[2][2]+=TmpMat4[2][2]; 
+        
+        //3.1.3) compute a part of the update update translation...
+	//... initial vector
+	TmpVec1[0]=f * this->GradJ.G(0,x,y);
+	TmpVec1[1]=f * this->GradJ.G(1,x,y);
+	TmpVec1[2]=f * this->GradJ.G(2,x,y);
+	
+	//... multiplication by Q
+	mult_3t3mat_3vec(this->Current_Rotation, TmpVec1, TmpVec2);
+	this->Update_Translat[0]+=TmpVec2[0];
+        this->Update_Translat[1]+=TmpVec2[1];
+        this->Update_Translat[2]+=TmpVec2[2];
+      }
+    }
+    
+    //3.1.4) divide by the number of voxels
+    this->Update_LogRotation[0][0]/=tempFl; this->Update_LogRotation[0][1]/=tempFl; this->Update_LogRotation[0][2]/=tempFl;
+    this->Update_LogRotation[1][0]/=tempFl; this->Update_LogRotation[1][1]/=tempFl; this->Update_LogRotation[1][2]/=tempFl;
+    this->Update_LogRotation[2][0]/=tempFl; this->Update_LogRotation[2][1]/=tempFl; this->Update_LogRotation[2][2]/=tempFl;
+    
+    this->Update_Translat[0]/=tempFl;
+    this->Update_Translat[1]/=tempFl;
+    this->Update_Translat[2]/=tempFl;
+  }
+  
+}
+
+
+///Update the translation between the images
+void LargeDefGradLagrange::UpdateTranslation(int IterationNb){
+  float real_rotation[3][3];
+  float tmpFl;
+  float factor;
+  float LocQuat[4][4];
+  float tmpQuat1[4][4];
+  float tmpQuat2[4][4];
+  float World_Template2Target[4][4];
+  int i,j;
+  
+  //1) compute reference values at the first iteration
+  if (IterationNb==0){
+    this->InitGradTranslation=sqrt((this->Update_Translat[0]*this->Update_Translat[0])+(this->Update_Translat[1]*this->Update_Translat[1])+(this->Update_Translat[2]*this->Update_Translat[2]));
+    
+    
+    this->InitGradLogRotation= this->Update_LogRotation[0][0]*this->Update_LogRotation[0][0]+this->Update_LogRotation[0][1]*this->Update_LogRotation[0][1]+this->Update_LogRotation[0][2]*this->Update_LogRotation[0][2];
+    this->InitGradLogRotation+=this->Update_LogRotation[1][0]*this->Update_LogRotation[1][0]+this->Update_LogRotation[1][1]*this->Update_LogRotation[1][1]+this->Update_LogRotation[1][2]*this->Update_LogRotation[1][2];
+    this->InitGradLogRotation+=this->Update_LogRotation[2][0]*this->Update_LogRotation[2][0]+this->Update_LogRotation[2][1]*this->Update_LogRotation[2][1]+this->Update_LogRotation[2][2]*this->Update_LogRotation[2][2];
+    this->InitGradLogRotation=sqrt(this->InitGradLogRotation);
+  }
+  
+  //2) update the translations
+  tmpFl=sqrt((this->Update_Translat[0]*this->Update_Translat[0])+(this->Update_Translat[1]*this->Update_Translat[1])+(this->Update_Translat[2]*this->Update_Translat[2]));
+  
+  if (tmpFl>this->InitGradTranslation) factor=Max_Update_Translation/tmpFl;
+  else                                 factor=Max_Update_Translation/this->InitGradTranslation;
+  
+  this->Current_Translat[0]+=factor*this->Update_Translat[0];
+  this->Current_Translat[1]+=factor*this->Update_Translat[1];
+  this->Current_Translat[2]+=factor*this->Update_Translat[2];
+  
+  ///BEGIN TO REMOVE
+  //this->Current_Translat[0]=0;
+  //this->Current_Translat[1]=0;
+  //this->Current_Translat[2]=0;
+  ///END TO REMOVE
+  
+  //3) update the rotations
+  tmpFl= this->Update_LogRotation[0][0]*this->Update_LogRotation[0][0]+this->Update_LogRotation[0][1]*this->Update_LogRotation[0][1]+this->Update_LogRotation[0][2]*this->Update_LogRotation[0][2];
+  tmpFl+=this->Update_LogRotation[1][0]*this->Update_LogRotation[1][0]+this->Update_LogRotation[1][1]*this->Update_LogRotation[1][1]+this->Update_LogRotation[1][2]*this->Update_LogRotation[1][2];
+  tmpFl+=this->Update_LogRotation[2][0]*this->Update_LogRotation[2][0]+this->Update_LogRotation[2][1]*this->Update_LogRotation[2][1]+this->Update_LogRotation[2][2]*this->Update_LogRotation[2][2];
+  tmpFl=sqrt(this->InitGradLogRotation);
+  
+  if (tmpFl>this->InitGradLogRotation) factor=Max_Update_LogRotation/tmpFl;
+  else                                 factor=Max_Update_LogRotation/this->InitGradLogRotation;
+  
+  this->Current_LogRotation[0][0]+=factor*this->Update_LogRotation[0][0]; this->Current_LogRotation[0][1]+=factor*this->Update_LogRotation[0][1]; this->Current_LogRotation[0][2]+=factor*this->Update_LogRotation[0][2]; 
+  this->Current_LogRotation[1][0]+=factor*this->Update_LogRotation[1][0]; this->Current_LogRotation[1][1]+=factor*this->Update_LogRotation[1][1]; this->Current_LogRotation[1][2]+=factor*this->Update_LogRotation[1][2]; 
+  this->Current_LogRotation[2][0]+=factor*this->Update_LogRotation[2][0]; this->Current_LogRotation[2][1]+=factor*this->Update_LogRotation[2][1]; this->Current_LogRotation[2][2]+=factor*this->Update_LogRotation[2][2]; 
+  
+  
+  Exponential_3t3matrix(this->Current_LogRotation,this->Current_Rotation);
+  ///BEGIN TO REMOVE
+  //this->Current_Rotation[0][0]=1;  this->Current_Rotation[0][1]=0;  this->Current_Rotation[0][2]=0;
+  //this->Current_Rotation[1][0]=0;  this->Current_Rotation[1][1]=1;  this->Current_Rotation[1][2]=0;
+  //this->Current_Rotation[2][0]=0;  this->Current_Rotation[2][1]=0;  this->Current_Rotation[2][2]=1;
+  ///END TO REMOVE
+  
+  cout << "+++++++++++++++++++++++Current rotation+++++++++++++++++++++++:" << endl;
+  cout << this->Current_Rotation[0][0]  << " " << this->Current_Rotation[0][1]  << " " << this->Current_Rotation[0][2]  << endl; 
+  cout << this->Current_Rotation[1][0]  << " " << this->Current_Rotation[1][1]  << " " << this->Current_Rotation[1][2]  << endl; 
+  cout << this->Current_Rotation[2][0]  << " " << this->Current_Rotation[2][1]  << " " << this->Current_Rotation[2][2]  << endl; 
+  cout << "++++++++++++++++++++++Current translation++++++++++++++++++++++:" << endl;
+  cout << this->Current_Translat[0]  << " " << this->Current_Translat[1]  << " " << this->Current_Translat[2]  << endl; 
+  cout << "++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++:" << endl;
+  
+  //4) compute the matrix Template2TargetCoord
+  
+  LocQuat[0][0]=this->Current_Rotation[0][0];  LocQuat[0][1]=this->Current_Rotation[0][1];  LocQuat[0][2]=this->Current_Rotation[0][2];  LocQuat[0][3]=this->Current_Translat[0];
+  LocQuat[1][0]=this->Current_Rotation[1][0];  LocQuat[1][1]=this->Current_Rotation[1][1];  LocQuat[1][2]=this->Current_Rotation[1][2];  LocQuat[1][3]=this->Current_Translat[1];  
+  LocQuat[2][0]=this->Current_Rotation[2][0];  LocQuat[2][1]=this->Current_Rotation[2][1];  LocQuat[2][2]=this->Current_Rotation[2][2];  LocQuat[2][3]=this->Current_Translat[2];
+  LocQuat[3][0]=0;                             LocQuat[3][1]=0;                             LocQuat[3][2]=0;                             LocQuat[3][3]=1;  
+    
+  invert_4t4quaternion(this->World_Target2Template,World_Template2Target);
+  
+  mult_quat4t4mat_quat4t4mat(World_Template2Target,this->ImTemplate[0].Image2World,tmpQuat1);
+  mult_quat4t4mat_quat4t4mat(LocQuat,tmpQuat1,tmpQuat2);
+  mult_quat4t4mat_quat4t4mat(this->ImTarget[0].World2Image,tmpQuat2,this->Template2TargetCoord);
+  
+
+  //cout << endl;
+  //cout << "Updated template to target:" << endl;
+  //for (i=0;i<4;i++){
+  //  for (j=0;j<4;j++){
+  //    cout << this->Template2TargetCoord[i][j] << " ";
+  //  }
+  //  cout << endl;
+  //}
+}
+
+
+
+
+
+///Update VelocityField with with the energy gradients.
+///Return MaxGrad/this->RefMaxGrad
+float LargeDefGradLagrange::UpdateVelocityField(int IterationNb){
+  int x, y, z, i, k;
+  float MaxGrad,MultFactor;
+  double LocGrad;
+  
+  //1) Compute the maximum of gradient in all time frames...
+  //...3D images
+  MaxGrad=0;
+  for (i=0;i<this->NbTimeSubdiv;i++) for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+    LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,z,i),2.)+pow((double)this->GradE.G(1,x,y,z,i),2.)+pow((double)this->GradE.G(2,x,y,z,i),2.));
+    if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+  }
+  
+  //...2D images
+  if (this->NZ==1){
+    for (i=0;i<this->NbTimeSubdiv;i++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,0,i),2.)+pow((double)this->GradE.G(1,x,y,0,i),2.));
+      if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+    }
+  }
+  
+  //2) maximum update control at the first iteration
+  if ((IterationNb==0)&&(RefMaxGrad<0.)) {
+    this->RefMaxGrad=MaxGrad;
+    if (this->RefMaxGrad==0){
+      cout << "It seems that the registered images are identical\n";
+      this->RefMaxGrad=1;
+    }
+    cout << "\n\nRefMaxGrad is set to " << this->RefMaxGrad << ". Keep this value if you continue these\n";
+    cout << "computations (using -PrefixInputs) to manage well the convergence.\n\n";
+  }
+  
+  //3) compute the MultFactor
+  if (MaxGrad>this->RefMaxGrad) MultFactor=this->MaxVelocityUpdate/MaxGrad;
+  else MultFactor=this->MaxVelocityUpdate/(this->RefMaxGrad);
+  
+  //4) Messages
+  if ((IterationNb==0)&&(MultFactor>0.01)) cout << "\nThe weight on the kernels is perhaps too low!!!\n \n";
+  
+  cout << " -> MaxGrad/RefMaxGrad=" << MaxGrad/this->RefMaxGrad  << "\n";
+  
+  //5) update the vector field...
+  //...3D images
+  for (i=0;i<this->NbTimeSubdiv;i++) for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+    this->VelocityField.P(this->VelocityField.G(0,x,y,z,i)-this->GradE.G(0,x,y,z,i)*MultFactor,0,x,y,z,i);
+    this->VelocityField.P(this->VelocityField.G(1,x,y,z,i)-this->GradE.G(1,x,y,z,i)*MultFactor,1,x,y,z,i);
+    this->VelocityField.P(this->VelocityField.G(2,x,y,z,i)-this->GradE.G(2,x,y,z,i)*MultFactor,2,x,y,z,i);
+  }
+  
+  //...2D images
+  if (this->NZ==1){
+    for (i=0;i<this->NbTimeSubdiv;i++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      this->VelocityField.P(this->VelocityField.G(0,x,y,0,i)-this->GradE.G(0,x,y,0,i)*MultFactor,0,x,y,0,i);
+      this->VelocityField.P(this->VelocityField.G(1,x,y,0,i)-this->GradE.G(1,x,y,0,i)*MultFactor,1,x,y,0,i);
+    }
+  }
+  
+  //6) IF WE WANT TO MEASURE THE INITIAL MOMENTUM
+  if (CptInitMomentum!=0){
+    //...3D image
+    for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      this->InitialMomentum.P(this->InitialMomentum.G(x,y,z)+this->GradInitialMomentum.G(x,y,z)*MultFactor,x,y,z);
+    }
+    
+    //...2D images
+    if (this->NZ==1){
+      for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+        this->InitialMomentum.P(this->InitialMomentum.G(x,y,0)+this->GradInitialMomentum.G(x,y,0)*MultFactor,x,y,0);
+      }
+    }
+  }
+  
+  
+  //7) IF SPLITTED KERNEL: update the contribution of each kernel in the velocity field
+  if (SplitKernels!=0){
+    for (k=0;k<this->NbKernels;k++){
+      //...3D images
+      for (i=0;i<this->NbTimeSubdiv;i++) for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+        this->SplittedVelocityField[k].P(this->SplittedVelocityField[k].G(0,x,y,z,i)-this->SplittedGradE[k].G(0,x,y,z,i)*MultFactor,0,x,y,z,i);
+        this->SplittedVelocityField[k].P(this->SplittedVelocityField[k].G(1,x,y,z,i)-this->SplittedGradE[k].G(1,x,y,z,i)*MultFactor,1,x,y,z,i);
+        this->SplittedVelocityField[k].P(this->SplittedVelocityField[k].G(2,x,y,z,i)-this->SplittedGradE[k].G(2,x,y,z,i)*MultFactor,2,x,y,z,i);
+      }
+      
+      //...2D images
+      if (this->NZ==1){
+        for (i=0;i<this->NbTimeSubdiv;i++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+          this->SplittedVelocityField[k].P(this->SplittedVelocityField[k].G(0,x,y,0,i)-this->SplittedGradE[k].G(0,x,y,0,i)*MultFactor,0,x,y,0,i);
+          this->SplittedVelocityField[k].P(this->SplittedVelocityField[k].G(1,x,y,0,i)-this->SplittedGradE[k].G(1,x,y,0,i)*MultFactor,1,x,y,0,i);
+        }
+      }
+    }
+  }
+  
+  return MaxGrad/this->RefMaxGrad;
+}
+
+
+
+
+
+///save the translation rotation estimation  (to use when the very last J1 is computed)
+void LargeDefGradLagrange::SaveResultTransRot(void){
+  char Name[256];
+  char Suffix[256];
+  FILE *DataFile;
+  
+  //1) save J1
+  strcpy(Name,PrefixOutputs);
+  strcpy(Suffix,"_FinalJ1.nii");
+  strcat(Name,Suffix);
+  this->J1.Write(Name,this->SourceFiles[0]);
+  
+  //2) save the rotations/translations
+  strcpy(Name,PrefixOutputs);
+  strcpy(Suffix,"_RotationTranslation.txt");
+  strcat(Name,Suffix);
+  
+  
+  DataFile=fopen(Name,"w");
+  
+  fprintf(DataFile,"Rotation:\n");
+  fprintf(DataFile,"%f    %f    %f\n",this->Current_Rotation[0][0],this->Current_Rotation[0][1],this->Current_Rotation[0][2]);
+  fprintf(DataFile,"%f    %f    %f\n",this->Current_Rotation[1][0],this->Current_Rotation[1][1],this->Current_Rotation[1][2]);
+  fprintf(DataFile,"%f    %f    %f\n",this->Current_Rotation[2][0],this->Current_Rotation[2][1],this->Current_Rotation[2][2]);
+  fprintf(DataFile,"Translation:\n");
+  fprintf(DataFile,"%f    %f    %f\n",this->Current_Translat[0],this->Current_Translat[1],this->Current_Translat[2]);
+  
+  fclose(DataFile);
+  
+}
+
+
+
+///save the result of the gradient descent (Beg 2005) for the current 3D image of the 4D time sequence
+void LargeDefGradLagrange::SaveResultGradientDescent(void){
+  //init -> compute the forward mapping and import the original input template (non pre-treated)
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->ForwardMapping);
+  
+  this->SaveVecDeformation(this->PrefixOutputs);
+  
+  //whole transformations
+  this->SaveVelocityFields(&this->VelocityField,this->PrefixOutputs);
+  this->SaveDeformations(this->PrefixOutputs);
+  if (this->FlowLength==1) this->SaveGlobalFlowLength(this->PrefixOutputs);
+  if (this->DetJacobian==1) this->SaveDetJacobian(this->PrefixOutputs);
+  if (this->FinalDefInvVec==1) this->SaveInvVecDeformation(this->PrefixOutputs);
+  if (this->CptInitMomentum==1) this->SaveInitMomentum(this->PrefixOutputs);
+  if (this->SimuMetamorphosis==1) this->SaveSimuMetamorphosis(this->PrefixOutputs);
+  
+  //transformations due to a kernel when using the sum of kernels
+  if (SplitKernels!=0){
+    this->SaveSplittedVelocityFields(this->PrefixOutputs);
+    this->SaveSplittedDeformations(this->PrefixOutputs);
+    if (this->FlowLength==1) this->SaveSplittedFlowLength(this->PrefixOutputs);
+    if (this->DetJacobian==1) this->SaveSplittedDetJacobian(this->PrefixOutputs);
+    if (this->FinalDefVec==1) this->SaveSplittedVecDeformation(this->PrefixOutputs);
+  }
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                          FUNCTIONS TO SAVE AND LOAD THE VARIOUS STRUCTURES
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///load the velocity fields
+void LargeDefGradLagrange::LoadVelocityFields(char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char VelocityField_X[256];
+  char VelocityField_Y[256];
+  char VelocityField_Z[256];
+  
+  //1) intialisation
+  strcpy(FileNameX,Prefix);
+  strcpy(VelocityField_X,"_VelocityField_X.nii");
+  strcat(FileNameX,VelocityField_X);
+  strcpy(FileNameY,Prefix);
+  strcpy(VelocityField_Y,"_VelocityField_Y.nii");
+  strcat(FileNameY,VelocityField_Y);
+  strcpy(FileNameZ,Prefix);
+  strcpy(VelocityField_Z,"_VelocityField_Z.nii");
+  strcat(FileNameZ,VelocityField_Z);
+  
+  this->VelocityField.Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+}
+
+
+///load the velocity fields
+void LargeDefGradLagrange::LoadSplittedVelocityFields(char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char VelocityField_X1[256];  char VelocityField_Y1[256];  char VelocityField_Z1[256];
+  char VelocityField_X2[256];  char VelocityField_Y2[256];  char VelocityField_Z2[256];
+  char VelocityField_X3[256];  char VelocityField_Y3[256];  char VelocityField_Z3[256];
+  char VelocityField_X4[256];  char VelocityField_Y4[256];  char VelocityField_Z4[256];
+  char VelocityField_X5[256];  char VelocityField_Y5[256];  char VelocityField_Z5[256];
+  char VelocityField_X6[256];  char VelocityField_Y6[256];  char VelocityField_Z6[256];
+  char VelocityField_X7[256];  char VelocityField_Y7[256];  char VelocityField_Z7[256];
+  
+  //intialisation
+  strcpy(VelocityField_X1,"_VelocityField_X1.nii");  strcpy(VelocityField_Y1,"_VelocityField_Y1.nii");  strcpy(VelocityField_Z1,"_VelocityField_Z1.nii");
+  strcpy(VelocityField_X2,"_VelocityField_X2.nii");  strcpy(VelocityField_Y2,"_VelocityField_Y2.nii");  strcpy(VelocityField_Z2,"_VelocityField_Z2.nii");
+  strcpy(VelocityField_X3,"_VelocityField_X3.nii");  strcpy(VelocityField_Y3,"_VelocityField_Y3.nii");  strcpy(VelocityField_Z3,"_VelocityField_Z3.nii");
+  strcpy(VelocityField_X4,"_VelocityField_X4.nii");  strcpy(VelocityField_Y4,"_VelocityField_Y4.nii");  strcpy(VelocityField_Z4,"_VelocityField_Z4.nii");
+  strcpy(VelocityField_X5,"_VelocityField_X5.nii");  strcpy(VelocityField_Y5,"_VelocityField_Y5.nii");  strcpy(VelocityField_Z5,"_VelocityField_Z5.nii");
+  strcpy(VelocityField_X6,"_VelocityField_X6.nii");  strcpy(VelocityField_Y6,"_VelocityField_Y6.nii");  strcpy(VelocityField_Z6,"_VelocityField_Z6.nii");
+  strcpy(VelocityField_X7,"_VelocityField_X7.nii");  strcpy(VelocityField_Y7,"_VelocityField_Y7.nii");  strcpy(VelocityField_Z7,"_VelocityField_Z7.nii");
+  
+  //velocity field 1
+  if (SplitKernels!=0){
+    if (this->NbKernels>0){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X1);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y1);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z1);
+      this->SplittedVelocityField[0].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+    
+    //velocity field 2
+    if (this->NbKernels>1){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X2);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y2);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z2);
+      this->SplittedVelocityField[1].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+    
+    //velocity field 3
+    if (this->NbKernels>2){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X3);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y3);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z3);
+      this->SplittedVelocityField[2].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+    
+    //velocity field 4
+    if (this->NbKernels>3){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X4);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y4);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z4);
+      this->SplittedVelocityField[3].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+    
+    //velocity field 5
+    if (this->NbKernels>4){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X5);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y5);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z5);
+      this->SplittedVelocityField[4].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+    
+    //velocity field 6
+    if (this->NbKernels>5){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X6);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y6);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z6);
+      this->SplittedVelocityField[5].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+    
+    //velocity field 7
+    if (this->NbKernels>6){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X7);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y7);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z7);
+      this->SplittedVelocityField[6].Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+    }
+  }
+}
+
+
+
+///save the velocity fields
+void LargeDefGradLagrange::SaveVelocityFields(VectorField * VelocityFieldLoc,char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char VelocityField_X[256];
+  char VelocityField_Y[256];
+  char VelocityField_Z[256];
+  
+  //intialisation
+  strcpy(FileNameX,Prefix);
+  strcpy(VelocityField_X,"_VelocityField_X.nii");
+  strcat(FileNameX,VelocityField_X);
+  strcpy(FileNameY,Prefix);
+  strcpy(VelocityField_Y,"_VelocityField_Y.nii");
+  strcat(FileNameY,VelocityField_Y);
+  strcpy(FileNameZ,Prefix);
+  strcpy(VelocityField_Z,"_VelocityField_Z.nii");
+  strcat(FileNameZ,VelocityField_Z);
+  
+  //save the velocity field
+  VelocityFieldLoc->Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+}
+
+///save the velocity fields
+void LargeDefGradLagrange::SaveSplittedVelocityFields(char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char VelocityField_X1[256];  char VelocityField_Y1[256];  char VelocityField_Z1[256];
+  char VelocityField_X2[256];  char VelocityField_Y2[256];  char VelocityField_Z2[256];
+  char VelocityField_X3[256];  char VelocityField_Y3[256];  char VelocityField_Z3[256];
+  char VelocityField_X4[256];  char VelocityField_Y4[256];  char VelocityField_Z4[256];
+  char VelocityField_X5[256];  char VelocityField_Y5[256];  char VelocityField_Z5[256];
+  char VelocityField_X6[256];  char VelocityField_Y6[256];  char VelocityField_Z6[256];
+  char VelocityField_X7[256];  char VelocityField_Y7[256];  char VelocityField_Z7[256];
+  
+  //intialisation
+  strcpy(VelocityField_X1,"_VelocityField_X1.nii");  strcpy(VelocityField_Y1,"_VelocityField_Y1.nii");  strcpy(VelocityField_Z1,"_VelocityField_Z1.nii");
+  strcpy(VelocityField_X2,"_VelocityField_X2.nii");  strcpy(VelocityField_Y2,"_VelocityField_Y2.nii");  strcpy(VelocityField_Z2,"_VelocityField_Z2.nii");
+  strcpy(VelocityField_X3,"_VelocityField_X3.nii");  strcpy(VelocityField_Y3,"_VelocityField_Y3.nii");  strcpy(VelocityField_Z3,"_VelocityField_Z3.nii");
+  strcpy(VelocityField_X4,"_VelocityField_X4.nii");  strcpy(VelocityField_Y4,"_VelocityField_Y4.nii");  strcpy(VelocityField_Z4,"_VelocityField_Z4.nii");
+  strcpy(VelocityField_X5,"_VelocityField_X5.nii");  strcpy(VelocityField_Y5,"_VelocityField_Y5.nii");  strcpy(VelocityField_Z5,"_VelocityField_Z5.nii");
+  strcpy(VelocityField_X6,"_VelocityField_X6.nii");  strcpy(VelocityField_Y6,"_VelocityField_Y6.nii");  strcpy(VelocityField_Z6,"_VelocityField_Z6.nii");
+  strcpy(VelocityField_X7,"_VelocityField_X7.nii");  strcpy(VelocityField_Y7,"_VelocityField_Y7.nii");  strcpy(VelocityField_Z7,"_VelocityField_Z7.nii");
+  
+  //velocity field 1
+  if (SplitKernels!=0){
+    if (this->NbKernels>0){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X1);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y1);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z1);
+      this->SplittedVelocityField[0].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+    
+    //velocity field 2
+    if (this->NbKernels>1){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X2);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y2);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z2);
+      this->SplittedVelocityField[1].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+    
+    //velocity field 3
+    if (this->NbKernels>2){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X3);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y3);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z3);
+      this->SplittedVelocityField[2].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+    
+    //velocity field 4
+    if (this->NbKernels>3){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X4);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y4);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z4);
+      this->SplittedVelocityField[3].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+    
+    //velocity field 5
+    if (this->NbKernels>4){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X5);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y5);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z5);
+      this->SplittedVelocityField[4].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+    
+    //velocity field 6
+    if (this->NbKernels>5){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X6);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y6);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z6);
+      this->SplittedVelocityField[5].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+    
+    //velocity field 7
+    if (this->NbKernels>6){
+      strcpy(FileNameX,Prefix);
+      strcat(FileNameX,VelocityField_X7);
+      strcpy(FileNameY,Prefix);
+      strcat(FileNameY,VelocityField_Y7);
+      strcpy(FileNameZ,Prefix);
+      strcat(FileNameZ,VelocityField_Z7);
+      this->SplittedVelocityField[6].Write(FileNameX,FileNameY,FileNameZ,this->SourceFiles[0]);
+    }
+  }
+}
+
+
+
+///save the deformations in time subdivisions (not the convergence)
+void LargeDefGradLagrange::SaveDeformations(char Prefix[256]){
+  int TimeLoc,x, y, z;
+  ScalarField Temp4DField;
+  ScalarField Temp3DField;
+  char FileName[256];
+  char Deformations[256];
+  char FinalDef[256];
+  ScalarField source_image;
+  
+  //read the original input image of the 1st channel (with no treatments)
+  source_image.Read(this->SourceFiles[0]);
+  
+  //intialisation
+  Temp4DField.CreateVoidField(this->NX, this->NY, this->NZ,this->NbTimeSubdiv);
+  strcpy(Deformations,"_Deformation.nii");
+  
+  Temp3DField.CreateVoidField(this->NX, this->NY, this->NZ);
+  strcpy(FinalDef,"_FinalDefSrc.nii");
+  
+  //save the deformations
+  for (TimeLoc=0;TimeLoc<this->NbTimeSubdiv;TimeLoc++){
+    Project3Dimage(&source_image,&this->ForwardMapping,&this->J0,TimeLoc);
+    
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      Temp4DField.P(this->J0.G(x,y,z),x, y, z, TimeLoc);
+    
+    if (TimeLoc==this->NbTimeSubdiv-1)
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        Temp3DField.P(this->J0.G(x,y,z),x, y, z);
+  }
+  
+  strcpy(FileName,Prefix);
+  strcat(FileName,Deformations);
+  Temp4DField.Write(FileName,this->SourceFiles[0]);
+  
+  
+  strcpy(FileName,Prefix);
+  strcat(FileName,FinalDef);
+  Temp3DField.Write(FileName,this->SourceFiles[0]);
+  //Temp3DField.Write(FileName,"./RefImages/ComplexCircleSrc.nii");
+}
+
+
+///save the deformations in time subdivisions (not the convergence)
+void LargeDefGradLagrange::SaveSimuMetamorphosis(char Prefix[256]){
+  int TimeLoc,x, y, z;
+  ScalarField Temp4DField;
+  char FileName[256];
+  char Deformations[256];
+  char FinalDef[256];
+  ScalarField source_image;
+  ScalarField target_image;
+  float Loc_t,Loc_1_m_t;
+  
+  //read the original input and output images of the 1st channel (with no treatments)
+  source_image.Read(this->SourceFiles[0]);
+  target_image.Read(this->TargetFiles[0]);
+  
+  //intialisation
+  Temp4DField.CreateVoidField(this->NX, this->NY, this->NZ,this->NbTimeSubdiv);
+  strcpy(Deformations,"_SimuMetamorphosis.nii");
+  
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->ForwardMapping);
+  CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+  
+  //save the deformations
+  for (TimeLoc=0;TimeLoc<this->NbTimeSubdiv;TimeLoc++){
+    Project3Dimage(&source_image,&this->ForwardMapping,&this->J0,TimeLoc);
+    Project3DImageUsingAffineTransfoAndTimeDepVF(Template2TargetCoord,&target_image,&this->BackwardMapping,&this->J1,TimeLoc);
+    
+    Loc_t=static_cast<float>(TimeLoc)/static_cast<float>(this->NbTimeSubdiv-1);
+    Loc_1_m_t=1-Loc_t;
+    
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      Temp4DField.P(this->J0.G(x,y,z)*Loc_1_m_t+this->J1.G(x,y,z)*Loc_t,x, y, z, TimeLoc);
+    }
+    
+  }
+  
+ 
+  strcpy(FileName,Prefix);
+  strcat(FileName,Deformations);
+  Temp4DField.Write(FileName,this->SourceFiles[0]);
+  
+}
+
+
+
+
+
+
+
+///save the deformations due to each kernel in the context of sum of kernels
+void LargeDefGradLagrange::SaveSplittedDeformations(char Prefix[256]){
+  int TimeLoc,x, y, z;
+  ScalarField Temp4DField;
+  char FileName[256];
+  char DeformationsK1[256];
+  char DeformationsK2[256];
+  char DeformationsK3[256];
+  char DeformationsK4[256];
+  char DeformationsK5[256];
+  char DeformationsK6[256];
+  char DeformationsK7[256];
+  ScalarField source_image;
+  int k;
+  
+  //read the original input image of the 1st channel (with no treatments)
+  source_image.Read(this->SourceFiles[0]);
+  
+  //intialisation
+  Temp4DField.CreateVoidField(this->NX, this->NY, this->NZ,this->NbTimeSubdiv);
+  strcpy(DeformationsK1,"_DeformationsK1.nii");
+  strcpy(DeformationsK2,"_DeformationsK2.nii");
+  strcpy(DeformationsK3,"_DeformationsK3.nii");
+  strcpy(DeformationsK4,"_DeformationsK4.nii");
+  strcpy(DeformationsK5,"_DeformationsK5.nii");
+  strcpy(DeformationsK6,"_DeformationsK6.nii");
+  strcpy(DeformationsK7,"_DeformationsK7.nii");
+  
+  //save the deformations
+  for (k=0;k<this->NbKernels;k++){
+    //compute the current forward mapping
+    if (k==0) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[0],&this->ForwardMapping);
+    if (k==1) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[1],&this->ForwardMapping);
+    if (k==2) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[2],&this->ForwardMapping);
+    if (k==3) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[3],&this->ForwardMapping);
+    if (k==4) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[4],&this->ForwardMapping);
+    if (k==5) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[5],&this->ForwardMapping);
+    if (k==6) CptPartialMappingFromVeloFields_IniIdMap(0,&this->VelocityField,&this->SplittedVelocityField[6],&this->ForwardMapping);
+    
+    //compute the deformations
+    for (TimeLoc=0;TimeLoc<this->NbTimeSubdiv;TimeLoc++){
+      Project3Dimage(&source_image,&this->ForwardMapping,&this->J0,TimeLoc);
+      
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        Temp4DField.P(this->J0.G(x,y,z),x, y, z, TimeLoc);
+    }
+    
+    //save the deformation
+    strcpy(FileName,Prefix);
+    if (k==0) strcat(FileName,DeformationsK1);
+    if (k==1) strcat(FileName,DeformationsK2);
+    if (k==2) strcat(FileName,DeformationsK3);
+    if (k==3) strcat(FileName,DeformationsK4);
+    if (k==4) strcat(FileName,DeformationsK5);
+    if (k==5) strcat(FileName,DeformationsK6);
+    if (k==6) strcat(FileName,DeformationsK7);
+    Temp4DField.Write(FileName,this->SourceFiles[0]);
+  }
+  
+  //recompute to entire ForwardMapping
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->ForwardMapping);
+}
+
+
+///save the vector field that transforms [source] into [target]
+void LargeDefGradLagrange::SaveVecDeformation(char Prefix[256]){
+  int x, y, z;
+  VectorField Temp3DField;
+  char FileName_X[256];
+  char FileName_Y[256];
+  char FileName_Z[256];
+  char VecDef_X[256];
+  char VecDef_Y[256];
+  char VecDef_Z[256];
+  float flX,flY,flZ;
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tmpX2,tmpY2,tmpZ2;
+  float World_Template2Target[4][4];
+  
+  //intialisation
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->BackwardMapping);
+  
+  Temp3DField.CreateVoidField(this->NX, this->NY, this->NZ);
+  
+  strcpy(VecDef_X,"_VecDef_X.nii");
+  strcpy(VecDef_Y,"_VecDef_Y.nii");
+  strcpy(VecDef_Z,"_VecDef_Z.nii");
+  
+  invert_4t4quaternion(this->World_Target2Template,World_Template2Target);
+  
+  //save the forward mapping
+  for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+    
+    srcX=flX*ImTemplate[0].Image2World[0][0]+flY*ImTemplate[0].Image2World[0][1]+flZ*ImTemplate[0].Image2World[0][2]+ImTemplate[0].Image2World[0][3];
+    srcY=flX*ImTemplate[0].Image2World[1][0]+flY*ImTemplate[0].Image2World[1][1]+flZ*ImTemplate[0].Image2World[1][2]+ImTemplate[0].Image2World[1][3];
+    srcZ=flX*ImTemplate[0].Image2World[2][0]+flY*ImTemplate[0].Image2World[2][1]+flZ*ImTemplate[0].Image2World[2][2]+ImTemplate[0].Image2World[2][3];
+    
+    tmpX=this->BackwardMapping.G(0,x,y,z,this->BackwardMapping.NT-1);
+    tmpY=this->BackwardMapping.G(1,x,y,z,this->BackwardMapping.NT-1);
+    tmpZ=this->BackwardMapping.G(2,x,y,z,this->BackwardMapping.NT-1);
+
+    tmpX2=tmpX*ImTemplate[0].Image2World[0][0]+tmpY*ImTemplate[0].Image2World[0][1]+tmpZ*ImTemplate[0].Image2World[0][2]+ImTemplate[0].Image2World[0][3];
+    tmpY2=tmpX*ImTemplate[0].Image2World[1][0]+tmpY*ImTemplate[0].Image2World[1][1]+tmpZ*ImTemplate[0].Image2World[1][2]+ImTemplate[0].Image2World[1][3];
+    tmpZ2=tmpX*ImTemplate[0].Image2World[2][0]+tmpY*ImTemplate[0].Image2World[2][1]+tmpZ*ImTemplate[0].Image2World[2][2]+ImTemplate[0].Image2World[2][3];
+    
+    trgX=tmpX2*World_Template2Target[0][0]+tmpY2*World_Template2Target[0][1]+tmpZ2*World_Template2Target[0][2]+World_Template2Target[0][3];
+    trgY=tmpX2*World_Template2Target[1][0]+tmpY2*World_Template2Target[1][1]+tmpZ2*World_Template2Target[1][2]+World_Template2Target[1][3];
+    trgZ=tmpX2*World_Template2Target[2][0]+tmpY2*World_Template2Target[2][1]+tmpZ2*World_Template2Target[2][2]+World_Template2Target[2][3];
+    
+    Temp3DField.P(trgX-srcX,0,x,y,z);
+    Temp3DField.P(trgY-srcY,1,x,y,z);
+    Temp3DField.P(trgZ-srcZ,2,x,y,z);
+    
+  }
+  
+  strcpy(FileName_X,Prefix);
+  strcat(FileName_X,VecDef_X);
+  strcpy(FileName_Y,Prefix);
+  strcat(FileName_Y,VecDef_Y);
+  strcpy(FileName_Z,Prefix);
+  strcat(FileName_Z,VecDef_Z);
+  
+  Temp3DField.Write(FileName_X,FileName_Y,FileName_Z,this->SourceFiles[0]);
+}
+
+
+
+///save the vector field that transforms [source] into [target]
+void LargeDefGradLagrange::SaveSplittedVecDeformation(char Prefix[256]){
+  int x, y, z,k;
+  ScalarField Temp3DField;
+  VectorField Temp3DVecField;
+  char FileName[256];
+  char VecDef_X_K1[256];  char VecDef_Y_K1[256];  char VecDef_Z_K1[256];
+  char VecDef_X_K2[256];  char VecDef_Y_K2[256];  char VecDef_Z_K2[256];
+  char VecDef_X_K3[256];  char VecDef_Y_K3[256];  char VecDef_Z_K3[256];
+  char VecDef_X_K4[256];  char VecDef_Y_K4[256];  char VecDef_Z_K4[256];
+  char VecDef_X_K5[256];  char VecDef_Y_K5[256];  char VecDef_Z_K5[256];
+  char VecDef_X_K6[256];  char VecDef_Y_K6[256];  char VecDef_Z_K6[256];
+  char VecDef_X_K7[256];  char VecDef_Y_K7[256];  char VecDef_Z_K7[256];
+  
+  //intialisation
+  Temp3DField.CreateVoidField(this->NX, this->NY, this->NZ);
+  Temp3DVecField.CreateVoidField(this->NX, this->NY, this->NZ);
+  
+  strcpy(VecDef_X_K1,"_VecDef_X_K1.nii");  strcpy(VecDef_Y_K1,"_VecDef_Y_K1.nii");  strcpy(VecDef_Z_K1,"_VecDef_Z_K1.nii");
+  strcpy(VecDef_X_K2,"_VecDef_X_K2.nii");  strcpy(VecDef_Y_K2,"_VecDef_Y_K2.nii");  strcpy(VecDef_Z_K2,"_VecDef_Z_K2.nii");
+  strcpy(VecDef_X_K3,"_VecDef_X_K3.nii");  strcpy(VecDef_Y_K3,"_VecDef_Y_K3.nii");  strcpy(VecDef_Z_K3,"_VecDef_Z_K3.nii");
+  strcpy(VecDef_X_K4,"_VecDef_X_K4.nii");  strcpy(VecDef_Y_K4,"_VecDef_Y_K4.nii");  strcpy(VecDef_Z_K4,"_VecDef_Z_K4.nii");
+  strcpy(VecDef_X_K4,"_VecDef_X_K5.nii");  strcpy(VecDef_Y_K4,"_VecDef_Y_K5.nii");  strcpy(VecDef_Z_K4,"_VecDef_Z_K5.nii");
+  strcpy(VecDef_X_K4,"_VecDef_X_K6.nii");  strcpy(VecDef_Y_K4,"_VecDef_Y_K6.nii");  strcpy(VecDef_Z_K4,"_VecDef_Z_K6.nii");
+  strcpy(VecDef_X_K4,"_VecDef_X_K7.nii");  strcpy(VecDef_Y_K4,"_VecDef_Y_K7.nii");  strcpy(VecDef_Z_K4,"_VecDef_Z_K7.nii");
+  
+  for (k=0;k<this->NbKernels;k++){
+    
+    ComputeLagrangianPartialMapping(0,this->NbTimeSubdiv,&this->VelocityField,&this->SplittedVelocityField[k],&Temp3DVecField);
+    
+    //save the forward mapping in direction X
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      Temp3DField.P(Temp3DVecField.G(0,x,y,z)-(float)x,x, y, z);
+    strcpy(FileName,Prefix);
+    if (k==0) strcat(FileName,VecDef_X_K1);
+    if (k==1) strcat(FileName,VecDef_X_K2);
+    if (k==2) strcat(FileName,VecDef_X_K3);
+    if (k==3) strcat(FileName,VecDef_X_K4);
+    if (k==4) strcat(FileName,VecDef_X_K5);
+    if (k==5) strcat(FileName,VecDef_X_K6);
+    if (k==6) strcat(FileName,VecDef_X_K7);
+    Temp3DField.Write(FileName,this->SourceFiles[0]);
+    
+    //save the forward mapping in direction Y
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      Temp3DField.P(Temp3DVecField.G(1,x,y,z)-(float)y,x, y, z);
+    strcpy(FileName,Prefix);
+    if (k==0) strcat(FileName,VecDef_Y_K1);
+    if (k==1) strcat(FileName,VecDef_Y_K2);
+    if (k==2) strcat(FileName,VecDef_Y_K3);
+    if (k==3) strcat(FileName,VecDef_Y_K4);
+    if (k==4) strcat(FileName,VecDef_Y_K5);
+    if (k==5) strcat(FileName,VecDef_Y_K6);
+    if (k==6) strcat(FileName,VecDef_Y_K7);
+    Temp3DField.Write(FileName,this->SourceFiles[0]);
+    
+    //save the forward mapping in direction Z
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      Temp3DField.P(Temp3DVecField.G(2,x,y,z)-(float)z,x, y, z);
+    strcpy(FileName,Prefix);
+    if (k==0) strcat(FileName,VecDef_Z_K1);
+    if (k==1) strcat(FileName,VecDef_Z_K2);
+    if (k==2) strcat(FileName,VecDef_Z_K3);
+    if (k==3) strcat(FileName,VecDef_Z_K4);
+    if (k==4) strcat(FileName,VecDef_Z_K5);
+    if (k==5) strcat(FileName,VecDef_Z_K6);
+    if (k==6) strcat(FileName,VecDef_Z_K7);
+    Temp3DField.Write(FileName,this->SourceFiles[0]);
+  }
+}
+
+
+
+///save the vector field that transforms [target] into [source]
+void LargeDefGradLagrange::SaveInvVecDeformation(char Prefix[256]){
+  int x, y, z;
+  VectorField Temp3DField;
+  char FileName_X[256];
+  char FileName_Y[256];
+  char FileName_Z[256];
+  char VecDef_X[256];
+  char VecDef_Y[256];
+  char VecDef_Z[256];
+  float flX,flY,flZ;
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tmpX2,tmpY2,tmpZ2;
+  float World_Template2Target[4][4];
+  
+  //intialisation
+  CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+  
+  Temp3DField.CreateVoidField(this->ImTarget[0].NX, this->ImTarget[0].NY, this->ImTarget[0].NZ);
+  
+  invert_4t4quaternion(this->World_Target2Template,World_Template2Target);
+  
+  //save the forward mapping
+  for (z = 0; z < this->ImTarget[0].NZ; z++) for (y = 0; y < this->ImTarget[0].NY; y++) for (x = 0; x < this->ImTarget[0].NX; x++){
+    flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+    
+    trgX=flX*ImTarget[0].Image2World[0][0]+flY*ImTarget[0].Image2World[0][1]+flZ*ImTarget[0].Image2World[0][2]+ImTarget[0].Image2World[0][3];
+    trgY=flX*ImTarget[0].Image2World[1][0]+flY*ImTarget[0].Image2World[1][1]+flZ*ImTarget[0].Image2World[1][2]+ImTarget[0].Image2World[1][3];
+    trgZ=flX*ImTarget[0].Image2World[2][0]+flY*ImTarget[0].Image2World[2][1]+flZ*ImTarget[0].Image2World[2][2]+ImTarget[0].Image2World[2][3];
+    
+    tmpX=trgX*this->World_Target2Template[0][0]+trgY*this->World_Target2Template[0][1]+trgZ*this->World_Target2Template[0][2]+this->World_Target2Template[0][3];
+    tmpY=trgX*this->World_Target2Template[1][0]+trgY*this->World_Target2Template[1][1]+trgZ*this->World_Target2Template[1][2]+this->World_Target2Template[1][3];
+    tmpZ=trgX*this->World_Target2Template[2][0]+trgY*this->World_Target2Template[2][1]+trgZ*this->World_Target2Template[2][2]+this->World_Target2Template[2][3];
+    
+    tmpX2=tmpX*ImTemplate[0].World2Image[0][0]+tmpY*ImTemplate[0].World2Image[0][1]+tmpZ*ImTemplate[0].World2Image[0][2]+ImTemplate[0].World2Image[0][3];
+    tmpY2=tmpX*ImTemplate[0].World2Image[1][0]+tmpY*ImTemplate[0].World2Image[1][1]+tmpZ*ImTemplate[0].World2Image[1][2]+ImTemplate[0].World2Image[1][3];
+    tmpZ2=tmpX*ImTemplate[0].World2Image[2][0]+tmpY*ImTemplate[0].World2Image[2][1]+tmpZ*ImTemplate[0].World2Image[2][2]+ImTemplate[0].World2Image[2][3];
+    
+    tmpX=this->BackwardMapping.G(0,tmpX2,tmpY2,tmpZ2,0);
+    tmpY=this->BackwardMapping.G(1,tmpX2,tmpY2,tmpZ2,0);
+    tmpZ=this->BackwardMapping.G(2,tmpX2,tmpY2,tmpZ2,0);
+    
+    srcX=tmpX*ImTemplate[0].Image2World[0][0]+tmpY*ImTemplate[0].Image2World[0][1]+tmpZ*ImTemplate[0].Image2World[0][2]+ImTemplate[0].Image2World[0][3];
+    srcY=tmpX*ImTemplate[0].Image2World[1][0]+tmpY*ImTemplate[0].Image2World[1][1]+tmpZ*ImTemplate[0].Image2World[1][2]+ImTemplate[0].Image2World[1][3];
+    srcZ=tmpX*ImTemplate[0].Image2World[2][0]+tmpY*ImTemplate[0].Image2World[2][1]+tmpZ*ImTemplate[0].Image2World[2][2]+ImTemplate[0].Image2World[2][3];
+    
+    
+    
+    Temp3DField.P(srcX-trgX,0,x,y,z);
+    Temp3DField.P(srcY-trgY,1,x,y,z);
+    Temp3DField.P(srcZ-trgZ,2,x,y,z);
+  }
+  
+  strcpy(VecDef_X,"_InvVecDef_X.nii");
+  strcpy(VecDef_Y,"_InvVecDef_Y.nii");
+  strcpy(VecDef_Z,"_InvVecDef_Z.nii");
+  strcpy(FileName_X,Prefix);
+  strcat(FileName_X,VecDef_X);
+  strcpy(FileName_Y,Prefix);
+  strcat(FileName_Y,VecDef_Y);
+  strcpy(FileName_Z,Prefix);
+  strcat(FileName_Z,VecDef_Z);
+  
+  Temp3DField.Write(FileName_X,FileName_Y,FileName_Z,this->SourceFiles[0]);
+}
+
+
+
+
+///save the  initial momentum that transforms [target] into [source]
+void LargeDefGradLagrange::SaveInitMomentum(char Prefix[256]){
+  char FileName[256];
+  char InitM[256];
+  
+  if (this->CptInitMomentum!=0){
+    //1) Save the niftii image
+    strcpy(InitM,"_InitMomentum.nii");
+    
+    strcpy(FileName,Prefix);
+    strcat(FileName,InitM);
+    InitialMomentum.Write(FileName,this->SourceFiles[0]);
+  }
+}
+
+
+
+///save the total length of the flow of deformation from each voxel of the image
+void LargeDefGradLagrange::SaveGlobalFlowLength(char Prefix[256]){
+  char VeloLength[256];
+  char EvoVeloLength[256];
+  
+  strcpy(VeloLength,"_TotalAOD.nii");
+  this->SaveFlowLength(&this->VelocityField,&this->VelocityField,this->PrefixOutputs,VeloLength);
+  
+  strcpy(EvoVeloLength,"EvoAOD.nii");
+  this->SaveEvoFlowLength(&this->VelocityField,&this->VelocityField,this->PrefixOutputs,EvoVeloLength);
+}
+
+///save the splitted length of the flow of deformation from each voxel of the image
+void LargeDefGradLagrange::SaveSplittedFlowLength(char Prefix[256]){
+  char VeloLengthK1[256];
+  char VeloLengthK2[256];
+  char VeloLengthK3[256];
+  char VeloLengthK4[256];
+  char VeloLengthK5[256];
+  char VeloLengthK6[256];
+  char VeloLengthK7[256];
+  
+  strcpy(VeloLengthK1,"_TotalAOD_K1.nii");
+  strcpy(VeloLengthK2,"_TotalAOD_K2.nii");
+  strcpy(VeloLengthK3,"_TotalAOD_K3.nii");
+  strcpy(VeloLengthK4,"_TotalAOD_K4.nii");
+  strcpy(VeloLengthK5,"_TotalAOD_K5.nii");
+  strcpy(VeloLengthK6,"_TotalAOD_K6.nii");
+  strcpy(VeloLengthK7,"_TotalAOD_K7.nii");
+  
+  if (this->NbKernels>0) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[0],this->PrefixOutputs,VeloLengthK1);
+  if (this->NbKernels>1) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[1],this->PrefixOutputs,VeloLengthK2);
+  if (this->NbKernels>2) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[2],this->PrefixOutputs,VeloLengthK3);
+  if (this->NbKernels>3) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[3],this->PrefixOutputs,VeloLengthK4);
+  if (this->NbKernels>4) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[4],this->PrefixOutputs,VeloLengthK5);
+  if (this->NbKernels>5) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[5],this->PrefixOutputs,VeloLengthK6);
+  if (this->NbKernels>6) this->SaveFlowLength(&this->VelocityField,&this->SplittedVelocityField[6],this->PrefixOutputs,VeloLengthK7);
+  
+  
+  strcpy(VeloLengthK1,"_EvoAOD_K1.nii");
+  strcpy(VeloLengthK2,"_EvoAOD_K2.nii");
+  strcpy(VeloLengthK3,"_EvoAOD_K3.nii");
+  strcpy(VeloLengthK4,"_EvoAOD_K4.nii");
+  strcpy(VeloLengthK5,"_EvoAOD_K5.nii");
+  strcpy(VeloLengthK6,"_EvoAOD_K6.nii");
+  strcpy(VeloLengthK7,"_EvoAOD_K7.nii");
+  
+  if (this->NbKernels>0) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[0],this->PrefixOutputs,VeloLengthK1);
+  if (this->NbKernels>1) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[1],this->PrefixOutputs,VeloLengthK2);
+  if (this->NbKernels>2) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[2],this->PrefixOutputs,VeloLengthK3);
+  if (this->NbKernels>3) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[3],this->PrefixOutputs,VeloLengthK4);
+  if (this->NbKernels>4) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[4],this->PrefixOutputs,VeloLengthK5);
+  if (this->NbKernels>5) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[5],this->PrefixOutputs,VeloLengthK6);
+  if (this->NbKernels>6) this->SaveEvoFlowLength(&this->VelocityField,&this->SplittedVelocityField[6],this->PrefixOutputs,VeloLengthK7);
+  
+  
+}
+
+
+
+
+///By following the flow defined by the velocity field 'VeloField4Flow' PROJECT AT T=0 the contribution of
+///'VeloField4Measure' in the total length of the flow from each point of the field.
+/// * 'VeloField4Measure' is assumed to be part of a linear decomposition of 'VeloField4Flow'.
+/// * If 'VeloField4Measure'=='VeloField4Flow' then the length of the flow defined by 'VeloField4Flow'
+///   is computed.
+void LargeDefGradLagrange::SaveFlowLength(VectorField * VeloField4Flow,VectorField * VeloField4Measure,char Prefix[256],char Suffix[256]){
+  ScalarField LengthOfFlow;
+  char FlowLength[256];
+  char FileName[256];
+  
+  CptLengthOfFlow(VeloField4Flow,VeloField4Measure,&LengthOfFlow);
+  
+  
+  strcpy(FlowLength,Suffix);
+  strcpy(FileName,Prefix);
+  strcat(FileName,FlowLength);
+  LengthOfFlow.Write(FileName,this->SourceFiles[0]);
+}
+
+///By following the flow defined by the velocity field 'VeloField4Flow' FOLLOW IN TIME the contribution of
+///'VeloField4Measure' in the length of the flow from each point of the field.
+/// * 'VeloField4Measure' is assumed to be part of a linear decomposition of 'VeloField4Flow'.
+/// * If 'VeloField4Measure'=='VeloField4Flow' then the length of the flow defined by 'VeloField4Flow'
+///   is computed.
+void LargeDefGradLagrange::SaveEvoFlowLength(VectorField * VeloField4Flow,VectorField * VeloField4Measure,char Prefix[256],char Suffix[256]){
+  ScalarField LengthOfFlow;
+  char FlowLength[256];
+  char FileName[256];
+  
+  CptEvoLengthOfFlow(VeloField4Flow,VeloField4Measure,&LengthOfFlow);
+  
+  
+  strcpy(FlowLength,Suffix);
+  strcpy(FileName,Prefix);
+  strcat(FileName,FlowLength);
+  LengthOfFlow.Write(FileName,this->SourceFiles[0]);
+}
+
+
+
+
+///save the map of the determinant of Jacobians
+void LargeDefGradLagrange::SaveDetJacobian(char Prefix[256]){
+  char FileName[256];
+  char StrDetJacobians[256];
+  
+  //compute the determinant of jacobian
+  CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+  
+  Cpt_JacobianDeterminant(&BackwardMapping,&DetJacobians,0);
+  
+  strcpy(StrDetJacobians,"_DetJacobian.nii");
+  
+  strcpy(FileName,Prefix);
+  strcat(FileName,StrDetJacobians);
+  DetJacobians.Write(FileName,this->SourceFiles[0]);
+}
+
+
+///save the map of the determinant of Jacobians for each kernel in the context of sum of kernels
+void LargeDefGradLagrange::SaveSplittedDetJacobian(char Prefix[256]){
+  VectorField Temp3DVecField;
+  int k;
+  char FileName[256];
+  char StrDetJacobiansK1[256];
+  char StrDetJacobiansK2[256];
+  char StrDetJacobiansK3[256];
+  char StrDetJacobiansK4[256];
+  char StrDetJacobiansK5[256];
+  char StrDetJacobiansK6[256];
+  char StrDetJacobiansK7[256];
+  
+  strcpy(StrDetJacobiansK1,"_DetJacobianK1.nii");
+  strcpy(StrDetJacobiansK2,"_DetJacobianK2.nii");
+  strcpy(StrDetJacobiansK3,"_DetJacobianK3.nii");
+  strcpy(StrDetJacobiansK4,"_DetJacobianK4.nii");
+  strcpy(StrDetJacobiansK5,"_DetJacobianK5.nii");
+  strcpy(StrDetJacobiansK6,"_DetJacobianK6.nii");
+  strcpy(StrDetJacobiansK7,"_DetJacobianK7.nii");
+  Temp3DVecField.CreateVoidField(this->NX, this->NY, this->NZ);
+  
+  //compute the determinant of jacobian
+  for (k=0;k<this->NbKernels;k++){
+    ComputeLagrangianPartialMapping(0,this->NbTimeSubdiv,&this->VelocityField,&this->SplittedVelocityField[k],&Temp3DVecField);
+    Cpt_JacobianDeterminant(&Temp3DVecField,&DetJacobians,0);
+    
+    strcpy(FileName,Prefix);
+    if (k==0) strcat(FileName,StrDetJacobiansK1);
+    if (k==1) strcat(FileName,StrDetJacobiansK2);
+    if (k==2) strcat(FileName,StrDetJacobiansK3);
+    if (k==3) strcat(FileName,StrDetJacobiansK4);
+    if (k==4) strcat(FileName,StrDetJacobiansK5);
+    if (k==5) strcat(FileName,StrDetJacobiansK6);
+    if (k==6) strcat(FileName,StrDetJacobiansK7);
+    DetJacobians.Write(FileName,this->SourceFiles[0]);
+  }
+}
+
+
+
+
+///Estimate the reference update scale for a given sigma (in the smoothing kernel)
+///we suppose everything is allocated
+float LargeDefGradLagrange::ReInitiateConvolver_HomoAppaWeights(){
+  float MaxGrad,refWght;
+  int d,x,y,z,i,j;
+  double LocGrad;
+  float sigmaXloc,sigmaYloc,sigmaZloc,realW1;
+  int ActualSplitKernels;
+  //1) Initiate the mappings
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->ForwardMapping);
+  CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+  
+  //2) do the process equivalent to an iteration (without the smoothing)
+  Cpt_JacobianDeterminant(&BackwardMapping,&DetJacobians,0);
+  Project3Dimage(&this->ImTemplate[0],&this->ForwardMapping,&this->J0,0);
+  Project3DImageUsingAffineTransfoAndTimeDepVF(Template2TargetCoord,&this->ImTarget[0],&this->BackwardMapping,&this->J1,0);
+  Cpt_Grad_ScalarField(&this->J0,&this->GradJ);
+  
+  
+  
+  
+  
+  //3) compute the weights
+  this->weight1=0;
+  this->weight2=0;
+  this->weight3=0;
+  this->weight4=0;
+  this->weight5=0;
+  this->weight6=0;
+  this->weight7=0;
+  
+  cout << endl;
+  cout << "Check weights: " << endl;
+  
+  for (i=0;i<this->NbKernels;i++){
+    if (i==0) {sigmaXloc=this->sigmaX1; sigmaYloc=this->sigmaY1; sigmaZloc=this->sigmaZ1; }
+    if (i==1) {sigmaXloc=this->sigmaX2; sigmaYloc=this->sigmaY2; sigmaZloc=this->sigmaZ2; }
+    if (i==2) {sigmaXloc=this->sigmaX3; sigmaYloc=this->sigmaY3; sigmaZloc=this->sigmaZ3; }
+    if (i==3) {sigmaXloc=this->sigmaX4; sigmaYloc=this->sigmaY4; sigmaZloc=this->sigmaZ4; }
+    if (i==4) {sigmaXloc=this->sigmaX5; sigmaYloc=this->sigmaY5; sigmaZloc=this->sigmaZ5; }
+    if (i==5) {sigmaXloc=this->sigmaX6; sigmaYloc=this->sigmaY6; sigmaZloc=this->sigmaZ6; }
+    if (i==6) {sigmaXloc=this->sigmaX7; sigmaYloc=this->sigmaY7; sigmaZloc=this->sigmaZ7; }
+    
+    //...init
+    this->FFTconvolver.ChangeKernel(1,sigmaXloc,sigmaYloc,sigmaZloc);
+    
+    //compute the first update
+    for (j=0;j<3;j++){
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        this->FFTconvolver.P(static_cast<float>(0),x,y,z);
+      
+      //compute the scalar field (one dimension out of the vector field) to smooth
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        if (!((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1)))
+          this->FFTconvolver.P(static_cast<float>((this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z) * this->GradJ.G(j,x,y,z)),x,y,z);
+      
+      //smooth the scalar field
+      FFTconvolver.Convolution();
+      
+      //set the gradient of Energy...
+        for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+          this->GradE.P(this->WghtVelField*2*this->VelocityField.G(j,x,y,z) - 2*FFTconvolver.G(x,y,z),j,x,y,z);
+    }
+    
+    
+    
+    //...3D images
+    MaxGrad=0;
+    for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,z,0),2.)+pow((double)this->GradE.G(1,x,y,z,0),2.)+pow((double)this->GradE.G(2,x,y,z,0),2.));
+      if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+    }
+    
+    //...2D images
+    if (this->NZ==1){
+      for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+        LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,0,0),2.)+pow((double)this->GradE.G(1,x,y,0,0),2.));
+        if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+      }
+    }
+ 
+    if (i==0) {this->weight1=100;  realW1=(1/MaxGrad);      cout << "sigma1 = " << sigmaXloc*x_mm <<  " / weight1 = " << this->weight1 << endl;}
+    if (i==1) {this->weight2=100*(1/MaxGrad)/realW1;        cout << "sigma2 = " << sigmaXloc*x_mm <<  " / weight2 = " << this->weight2 << endl;}
+    if (i==2) {this->weight3=100*(1/MaxGrad)/realW1;        cout << "sigma3 = " << sigmaXloc*x_mm <<  " / weight3 = " << this->weight3 << endl;}
+    if (i==3) {this->weight4=100*(1/MaxGrad)/realW1;        cout << "sigma4 = " << sigmaXloc*x_mm <<  " / weight4 = " << this->weight4 << endl;}
+    if (i==4) {this->weight5=100*(1/MaxGrad)/realW1;        cout << "sigma5 = " << sigmaXloc*x_mm <<  " / weight5 = " << this->weight5 << endl;}
+    if (i==5) {this->weight6=100*(1/MaxGrad)/realW1;        cout << "sigma6 = " << sigmaXloc*x_mm <<  " / weight6 = " << this->weight6 << endl;}
+    if (i==6) {this->weight7=100*(1/MaxGrad)/realW1;        cout << "sigma7 = " << sigmaXloc*x_mm <<  " / weight7 = " << this->weight7 << endl;}
+  }
+
+  cout << endl;
+  
+  this->FFTconvolver.InitiateConvolver(this->NX,this->NY,this->NZ,this->weight1,this->sigmaX1,this->sigmaY1,this->sigmaZ1,this->weight2,this->sigmaX2,this->sigmaY2,this->sigmaZ2,this->weight3,this->sigmaX3,this->sigmaY3,this->sigmaZ3,this->weight4,this->sigmaX4,this->sigmaY4,this->sigmaZ4,this->weight5,this->sigmaX5,this->sigmaY5,this->sigmaZ5,this->weight6,this->sigmaX6,this->sigmaY6,this->sigmaZ6,this->weight7,this->sigmaX7,this->sigmaY7,this->sigmaZ7);
+
+    return 1;
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                      RUN FUNCTIONS
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+///Measure of the inverse typical amplitude of the deformations for given source
+///and target images plus a simple Gaussian Kernel with a weight = 1.
+float LargeDefGradLagrange::Run_MeasureTypicalAmplitude(void){
+  float MaxGrad;
+  double LocGrad;
+  int x,y,z,i;
+  
+  //1) INITIALISATION
+  
+  //1.1) make sure that only a simple kernel with mono-channel images and no input velocity field will be used
+  this->weight1=1.;
+  this->weight2=0.;   this->sigmaX2=-1.; this->sigmaY2=-1.; this->sigmaZ2=-1.;
+  this->weight3=0.;   this->sigmaX3=-1.; this->sigmaY3=-1.; this->sigmaZ3=-1.;
+  this->weight4=0.;   this->sigmaX4=-1.; this->sigmaY4=-1.; this->sigmaZ4=-1.;
+  this->weight5=0.;   this->sigmaX5=-1.; this->sigmaY5=-1.; this->sigmaZ5=-1.;
+  this->weight6=0.;   this->sigmaX6=-1.; this->sigmaY6=-1.; this->sigmaZ6=-1.;
+  this->weight7=0.;   this->sigmaX7=-1.; this->sigmaY7=-1.; this->sigmaZ7=-1.;
+  this->NbKernels=1;
+  this->SplitKernels=0;
+  this->NbChannels=1;
+  for (i=1;i<100;i++) strcpy(this->SourceFiles[i],"Null");
+  for (i=1;i<100;i++) strcpy(this->TargetFiles[i],"Null");
+  strcpy(this->PrefixInputs,"Null");
+  
+  //1.2) Pre-treatment of the inuput images (grey level alignment + margins)
+  this->ReadAndTreatInputImages();
+  
+  //1.3) Allocations of the scalar and vector fields + definition of global parameters
+  this->AllocateAllVariables();
+  
+  //1.4) Initiate the class to smooth the images
+  FFTconvolver.InitiateConvolver(this->NX,this->NY,this->NZ,1.,this->sigmaX1,this->sigmaY1,this->sigmaZ1);
+  
+  //2) MEASURE OF THE TYPICAL AMPLITUDE
+  
+  //2.1) compute the forward mapping on space
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->ForwardMapping);
+  
+  //2.2) compute the backward mapping on space
+  CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+  
+  //2.3) LOOP ON THE TIME SUBDIVISIONS
+  //2.3.1) compute the determinant of the jacobian of the transformation
+  Cpt_JacobianDeterminant(&BackwardMapping,&DetJacobians,0);
+  
+  //2.3.2) compute the temporary image transformed using the forward mapping from time 0 -> J0
+  Project3Dimage(&this->ImTemplate[0],&this->ForwardMapping,&this->J0,0);
+  
+  //2.3.3) compute the temporary image transformed using the backward mapping from time 1 -> J1
+  Project3DImageUsingAffineTransfoAndTimeDepVF(Template2TargetCoord,&this->ImTarget[0],&this->BackwardMapping,&this->J1,0);
+  
+  //2.3.4) compute gradient of J0
+  Cpt_Grad_ScalarField(&this->J0,&this->GradJ);
+  
+  //2.3.5) compute the gradient of energy
+  this->ComputeEnergyGradient(0,0);
+  
+  //2.4) Compute the maximum of gradient in all time frames...
+  //...3D images
+  MaxGrad=0;
+  for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+    LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,z,0),2.)+pow((double)this->GradE.G(1,x,y,z,0),2.)+pow((double)this->GradE.G(2,x,y,z,0),2.));
+    if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+  }
+  
+  //...2D images
+  if (this->NZ==1){
+    for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,0,0),2.)+pow((double)this->GradE.G(1,x,y,0,0),2.));
+      if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+    }
+  }
+  
+  
+  //3) RETURN THE INVERSE TYPICAL AMPLITUDE
+  // the *10000 is only here for readability convenience
+  
+  //cout << "Typical update = " << MaxGrad/10000. << "\n";
+  cout << "Inverse typical update = " << 10000./MaxGrad << "\n";
+  cout << "-> Use this value as the weight of a Gaussian kernel to have the same apparent weights everywhere.\n";
+  
+  return 1./MaxGrad;
+}
+
+
+
+
+
+///Function to solve the registration using the gradient descent algorithm of Beg 05
+void LargeDefGradLagrange::Run_Default(void){
+  int IterationStopper;
+  int IterationNb;
+  int TimeSubdiv;
+  int IdChannel;
+  float SqrtSSD;
+  float NormaMaxGrad;  //[maximum gradient at the current iteration] / [maximum gradient at the first iteration]
+  float PreviousNormaMaxGrad[7];
+  int i;
+  
+  //1) INITIALISATION
+  
+  //1.1) Pre-treatment of the inuput images (grey level alignment + margins)
+  this->ReadAndTreatInputImages();
+  
+  //1.2) Allocations of the scalar and vector fields + definition of global parameters
+  this->AllocateAllVariables();
+  
+  
+  //2) GRADIENT DESCENT
+  if (this->iteration_nb==0) IterationStopper=1;
+  else IterationStopper=0;
+  IterationNb=0;
+  for (i=0;i<7;i++) PreviousNormaMaxGrad[i]=1.;
+  while (IterationStopper==0){
+    cout << "Iteration Number " << IterationNb+1 << " / " << this->iteration_nb << "\n";
+    
+    //2.1) compute the forward mapping on space
+    CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->ForwardMapping);
+    
+    //2.2) compute the backward mapping on space
+    CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+    
+    //2.3) eventually also computes the mapping from t=0.5
+    if (this->symmetric==1) CptMappingFromVeloField_IniIdMap((this->VelocityField.NT-1)/2,&this->VelocityField,&this->MappingFromT05);
+    
+    //2.3) LOOP ON THE TIME SUBDIVISIONS AND THE CHANNELS
+    for (TimeSubdiv=0;TimeSubdiv<this->NbTimeSubdiv;TimeSubdiv++){//LOOP ON THE TIME SUBDIVISIONS
+      
+      //2.3.1) compute the determinant of the jacobian of the transformation
+      if (this->symmetric==0) Cpt_JacobianDeterminant(&BackwardMapping,&DetJacobians,TimeSubdiv);
+      else  Cpt_JacobianDeterminant(&MappingFromT05,&DetJacobians,TimeSubdiv);
+      
+      for (IdChannel=0;IdChannel<this->NbChannels;IdChannel++){//LOOP ON THE CHANNELS
+        //2.3.2) compute the temporary image transformed using the forward mapping from time 0 -> J0
+        Project3Dimage(&this->ImTemplate[IdChannel],&this->ForwardMapping,&this->J0,TimeSubdiv);
+        
+        //2.3.3) compute the temporary image transformed using the backward mapping from time 1 -> J1
+        Project3DImageUsingAffineTransfoAndTimeDepVF(Template2TargetCoord,&this->ImTarget[IdChannel],&this->BackwardMapping,&this->J1,TimeSubdiv);
+        
+        //2.3.4) compute gradient of J
+        if (this->symmetric==0)  Cpt_Grad_ScalarField(&this->J0,&this->GradJ);
+        else{
+          if(TimeSubdiv<=(this->NbTimeSubdiv-1)/2)  Cpt_Grad_ScalarField(&this->J0,&this->GradJ);
+          else  Cpt_Grad_ScalarField(&this->J1,&this->GradJ);
+        }
+        
+        //2.3.5) compute the gradient of energy
+        this->ComputeEnergyGradient(TimeSubdiv,IdChannel);
+        
+        //2.3.6) Compute the temporal derivatives of the translation and rotation
+        if ((this->TranslatEstim==1)&&(TimeSubdiv==this->NbTimeSubdiv-1)) this->CptUpdateTranslatVelo(IdChannel);
+        
+        //2.3.7) Measure the convergence of the similarity between the source and target image
+        if (ShowSSD==1) if (TimeSubdiv==this->NbTimeSubdiv-1){
+          SqrtSSD=CalcSqrtSumOfSquaredDif(&this->J0,&this->J1);
+          cout << "Sqrt SSD = " << SqrtSSD << " (Channel " << IdChannel << ")\n";
+        }
+      }
+    }
+    
+    //2.4) update the velocity fields
+    NormaMaxGrad=this->UpdateVelocityField(IterationNb);
+    if (this->TranslatEstim==1) this->UpdateTranslation(IterationNb);
+    
+    //2.5) end of the convergence...
+    //...controled by the number of iterations
+    IterationNb++;
+    if (IterationNb>=this->iteration_nb) IterationStopper=1;
+    
+    //...controled by the maximum gradient
+    if ((NormaMaxGrad<epsilon)&&(NormaMaxGrad>PreviousNormaMaxGrad[0])&&(NormaMaxGrad>PreviousNormaMaxGrad[2])&&(NormaMaxGrad>PreviousNormaMaxGrad[4])&&(NormaMaxGrad>PreviousNormaMaxGrad[6]))  IterationStopper=1;
+    PreviousNormaMaxGrad[6]=PreviousNormaMaxGrad[5];
+    PreviousNormaMaxGrad[5]=PreviousNormaMaxGrad[4];
+    PreviousNormaMaxGrad[4]=PreviousNormaMaxGrad[3];
+    PreviousNormaMaxGrad[3]=PreviousNormaMaxGrad[2];
+    PreviousNormaMaxGrad[2]=PreviousNormaMaxGrad[1];
+    PreviousNormaMaxGrad[1]=PreviousNormaMaxGrad[0];
+    PreviousNormaMaxGrad[0]=NormaMaxGrad;
+  }
+  
+  //3) SAVE THE RESULTS
+  if (this->TranslatEstim==1) this->SaveResultTransRot();
+  
+  this->SaveResultGradientDescent();
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                        MAIN RUN FUNCTION 
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///run function
+void LargeDefGradLagrange::Run(void)
+{
+  if (this->MeasureTypicAmp!=1)
+    this->Run_Default();
+  else
+    this->Run_MeasureTypicalAmplitude();
+}
+

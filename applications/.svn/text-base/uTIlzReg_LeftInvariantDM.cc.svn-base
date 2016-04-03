@@ -1,0 +1,196 @@
+/*=========================================================================
+ 
+ Authors: Laurent Risser, Francois-Xavier Vialard
+ 
+ =========================================================================*/
+
+#include <LeftInvariantDM.h>
+
+void usage(){
+  cerr << "Usage: uTIlzReg_LIDM [Source] [Target] <options>\n";
+  cerr << "Where <options> are one or more of the following:\n";
+  cerr << "  Primary options:\n";
+  cerr << "    <-iterations n>      Number of iterations (default=10)\n";
+  cerr << "    <-subdivisions n>    Number of subdivisons (default=10)\n";
+  cerr << "    <-MaxVeloUpdt n>     Maximum velocity update at each iteration (default=0.4 voxels)\n";
+  cerr << "  Inputs and Outputs:\n";
+  cerr << "    <-PrefixInputs n>    Prefix of the files containing an initial velocity field (default=\"Null\")\n";
+  cerr << "    <-PrefixOutputs n>   Prefix of the files containing the outputs (default=\"Outputs\")\n";
+  cerr << "    <-Mask n>            Definition of a mask (default=\"Null\")\n";
+  cerr << "    <-affineT n>         Affine transfo from Trg to Src in the world domain. The 4*3 parameters are: r_xx r_xy r_xz t_x  r_yx ... t_z\n";
+  cerr << "  Kernels (Default: -Gauss 1):\n";
+  cerr << "    <-Gauss S>           Gaussian kernel (S = std. dev. in mm)\n";
+  cerr << "  Secondary options:\n";
+  cerr << "    <-margins n>         Margin of the image where the calculations are reduced  (default=0 voxels)\n";
+  cerr << "    <-WghtVeloField n>   Weight of the velocity field in the energy (default=1.) \n";
+  cerr << "    <-RefMaxGrad n>      Value to manage the convergence. Automatically configured if <0 (default=-1.)\n";
+  cerr << "    <-epsilon n>         Threshold on the normalized max update of the velicty field (default=0.2)\n";
+  cerr << "  Special Outputs:\n";
+  cerr << "    <-FinalDefInvVec>    Displacement field in mm from [Target] to [Source]\n";
+  cerr << "    <-AOD>               Amplitude of the deformations from each voxel of the source image\n";
+  cerr << "    <-DetJacobian>       Determinant of the Jacobian at each voxel\n";
+  cerr << "    <-InitMomentum>      Estimated initial momentum\n";
+  cerr << "    <-ShowSSD>           Show the Sum of the Squared Differences at t=1 ieration after iteration\n";
+  cerr << "   \n";
+  
+  exit(1);
+}
+
+int main(int argc, char **argv){
+  LIDM LargeDef;
+  bool ok;
+  
+  // Check command line
+  if (argc < 3) {
+    usage();
+  }
+  
+  // Read the name of input and output images (= 1st channel)
+  strcpy(LargeDef.SourceFile,argv[1]);
+  argc--;  argv++;
+  strcpy(LargeDef.TargetFile,argv[1]);
+  argc--;  argv++;
+  
+  // Parse remaining parameters
+  while (argc > 1) {
+    //1 - Primary options
+    ok = false;
+    if ((ok == false) && (strcmp(argv[1], "-iterations") == 0)) {
+      argc--; argv++;
+      LargeDef.iteration_nb = atoi(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-subdivisions") == 0)) {
+      argc--; argv++;
+      LargeDef.NbTimeSubdiv = atoi(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-MaxVeloUpdt") == 0)) {
+      argc--; argv++;
+      LargeDef.MaxVelocityUpdate = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    //2 - Inputs and Outputs
+    if ((ok == false) && (strcmp(argv[1], "-PrefixInputs") == 0)) {
+      argc--; argv++;
+      strcpy(LargeDef.PrefixInputs,argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-PrefixOutputs") == 0)) {
+      argc--; argv++;
+      strcpy(LargeDef.PrefixOutputs,argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-Mask") == 0)) {
+      argc--; argv++;
+      strcpy(LargeDef.MaskFile,argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    //3 - Kernels
+    if ((ok == false) && (strcmp(argv[1], "-Gauss") == 0)) {
+      argc--; argv++;
+      LargeDef.sigmaX1 = atof(argv[1]);
+      LargeDef.sigmaY1 = atof(argv[1]);
+      LargeDef.sigmaZ1 = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    
+    
+    if ((ok == false) && (strcmp(argv[1], "-affineT") == 0)) {
+      argc--; argv++;
+      LargeDef.World_Target2Template[0][0]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[0][1]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[0][2]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[0][3]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[1][0]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[1][1]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[1][2]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[1][3]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[2][0]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[2][1]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[2][2]=atof(argv[1]);
+      argc--; argv++;
+      LargeDef.World_Target2Template[2][3]=atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    
+    
+    //4 - Secondary options
+    if ((ok == false) && (strcmp(argv[1], "-margins") == 0)) {
+      argc--; argv++;
+      LargeDef.Margin = atoi(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-WghtVeloField") == 0)) {
+      argc--; argv++;
+      LargeDef.WghtVelField = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-RefMaxGrad") == 0)) {
+      argc--; argv++;
+      LargeDef.RefMaxGrad = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-epsilon") == 0)) {
+      argc--; argv++;
+      LargeDef.epsilon = atof(argv[1]);
+      argc--; argv++;
+      ok = true;
+    }
+    //5) Special outputs
+    if ((ok == false) && (strcmp(argv[1], "-AOD") == 0)) {
+      argc--; argv++;
+      LargeDef.FlowLength = 1;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-DetJacobian") == 0)) {
+      argc--; argv++;
+      LargeDef.DetJacobian = 1;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-InitMomentum") == 0)) {
+      argc--; argv++;
+      LargeDef.CptInitMomentum = 1;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-FinalDefInvVec") == 0)) {
+      argc--; argv++;
+      LargeDef.FinalDefInvVec = 1;
+      ok = true;
+    }
+    if ((ok == false) && (strcmp(argv[1], "-ShowSSD") == 0)) {
+      argc--; argv++;
+      LargeDef.ShowSSD = 1;
+      ok = true;
+    }
+    if (ok == false) usage();
+  }
+  
+  //run process
+  cout << "Large Deformation registration using Beg 05's technique ... \n"; cout.flush();
+  LargeDef.Run();
+  cout << "done" << endl;
+  
+  return 0;
+}

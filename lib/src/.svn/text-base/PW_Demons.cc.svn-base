@@ -1,0 +1,847 @@
+/*=========================================================================
+ 
+ Date      : $Date: 18.01.2011$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#include <PW_Demons.h>
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                   CONSTRUCTOR AND DESTRUCTOR
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+LargeDefPWDemons::LargeDefPWDemons(void){
+	
+  //default parameters
+	iteration_nb=10;
+  alpha=1;
+  DefField_TimeSmooth=0;
+  DefField_NbSubdiv=1;
+	Update_TimeSmooth=20*20/2;
+	Update_NbSubdiv=2;
+  MaxUpdateAllowed=1;
+	Margin=0;
+	GreyLevAlign=0;
+  IndicatorMI=0;
+	GLA_Padding_Src=-1.;
+	GLA_Padding_Trg=-1.;
+  lambdaX=1;
+	strcpy(PrefixInputs,"Null");
+	strcpy(PrefixOutputs,"Outputs");
+	strcpy(SourceFiles[0],"Null");
+	strcpy(TargetFiles[0],"Null");
+	strcpy(MaskFile,"Null");
+  MaskDefined=0;
+  World_Target2Template[0][0]=1; World_Target2Template[0][1]=0;   World_Target2Template[0][2]=0;    World_Target2Template[0][3]=0;   
+  World_Target2Template[1][0]=0; World_Target2Template[1][1]=1;   World_Target2Template[1][2]=0;    World_Target2Template[1][3]=0;   
+  World_Target2Template[2][0]=0; World_Target2Template[2][1]=0;   World_Target2Template[2][2]=1;    World_Target2Template[2][3]=0;   
+  World_Target2Template[3][0]=0; World_Target2Template[3][1]=0;   World_Target2Template[3][2]=0;    World_Target2Template[3][3]=1; 
+  x_mm=1;
+  y_mm=1;
+  y_mm=1;
+  ExtendTrgImag_LowerX=0;
+  ExtendTrgImag_UpperX=0;
+  ExtendTrgImag_LowerY=0;
+  ExtendTrgImag_UpperY=0;
+  ExtendTrgImag_LowerZ=0;
+  ExtendTrgImag_UpperZ=0;
+  UnderSampleTrgFactor=1;
+  WhichLF_HF=1;
+  BoundaryMargin=3;
+}
+
+LargeDefPWDemons::~LargeDefPWDemons(void){}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                        SUB-FUNCTIONS TO PERFORM THE REGISTRATION
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///initiate the gradient descent
+void LargeDefPWDemons::ReadAndTreatInputImages(void){
+	int x, y, z;
+	int DistClosestEdge;
+	int i,j;
+	double mean1,mean2,std1,std2;
+  float tempQuat[4][4];
+  ScalarField TempImTarget;
+	char FileTreatedTarget[256];
+  char DotNii[256];
+  
+	//1) CREATE THE SOURCE AND TARGET IMAGES 3D FOR THE CALCULATIONS
+	//    -->  ImTemplate[c].G(x,y,z) = gray level at (x,y,z)
+	//    -->  ImTarget[c].G(x,y,z)  = gray level at (x,y,z)
+	this->ImTemplate = new ScalarField [1];
+	this->ImTarget = new ScalarField [1];
+  
+	//2) READ INPUTS
+  //2.1.a) read source files
+  this->ImTemplate[0].Read(this->SourceFiles[0]);
+    
+  //2.1.b) read target files
+  if ((fabs(this->UnderSampleTrgFactor-1)<=0.01)&&(ExtendTrgImag_LowerX<=0)&&(ExtendTrgImag_UpperX<=0)&&(ExtendTrgImag_LowerY<=0)&&(ExtendTrgImag_UpperY<=0)&&(ExtendTrgImag_LowerZ<=0)&&(ExtendTrgImag_UpperZ<=0)){
+    
+    // the images do not required any downsampling or domain expansion
+    this->ImTarget[0].Read(this->TargetFiles[0]);
+  }
+  else{ // there is at leat a special treatment to do with the target images
+    //name of the treated target file
+    strcpy(FileTreatedTarget,"tmp_");
+    strcpy(DotNii,".nii");
+    
+    strcat(FileTreatedTarget,this->PrefixOutputs);
+    strcat(FileTreatedTarget,DotNii);
+    
+    cout << "After treatments (resampling and/or expansion): " <<  this->TargetFiles[0] << " becomes " << FileTreatedTarget << endl;
+    
+    //treat all the channels
+    for (i=0;i<1;i++){
+      
+      //expend the image
+      if (!((ExtendTrgImag_LowerX<=0)&&(ExtendTrgImag_UpperX<=0)&&(ExtendTrgImag_LowerY<=0)&&(ExtendTrgImag_UpperY<=0)&&(ExtendTrgImag_LowerZ<=0)&&(ExtendTrgImag_UpperZ<=0))){
+        TempImTarget.ReadAndExpend(this->TargetFiles[i],ExtendTrgImag_LowerX,ExtendTrgImag_UpperX,ExtendTrgImag_LowerY,ExtendTrgImag_UpperY,ExtendTrgImag_LowerZ,ExtendTrgImag_UpperZ);
+        TempImTarget.Write(FileTreatedTarget);
+        
+        strcpy(this->TargetFiles[i],FileTreatedTarget);  // a bit dirty but useful as the results are saved in the target coordinate space
+        if (fabs(this->UnderSampleTrgFactor-1)<=0.01) this->ImTarget[i].Read(this->TargetFiles[i]);
+      }
+      
+      //undersample the image
+      if (fabs(this->UnderSampleTrgFactor-1)>0.01){
+        TempImTarget.Read_and_Undersample(this->TargetFiles[i],this->UnderSampleTrgFactor);
+        TempImTarget.Write(FileTreatedTarget);
+        
+        strcpy(this->TargetFiles[i],FileTreatedTarget);  // a bit dirty but useful as the results are saved in the target coordinate space
+        this->ImTarget[i].Read(this->TargetFiles[i]);
+      }
+    }
+  }
+  
+  //2.1.a) allocate the memory for the deformed template
+  this->DeformedTemplate.Read(this->TargetFiles[0]);
+  this->DeformedTarget.Read(this->TargetFiles[0]);
+  this->TempImage.Read(this->TargetFiles[0]);
+  
+  //2.2) check whether  3D or 2D images are opened
+  if (this->ImTemplate[0].NT>1) cout << "Source image  depends on time!!!";
+  if (this->ImTarget[0].NT>1) cout << "Target image depends on time!!!";
+  
+	//2.3) variables containing the size of the target image (and all the other images, except the source image)
+	this->NX=this->ImTarget[0].NX;
+	this->NY=this->ImTarget[0].NY;
+	this->NZ=this->ImTarget[0].NZ;
+	this->NT=1;
+  
+  //2.4) variables containing the size of the source image
+	this->NXs=this->ImTemplate[0].NX;
+	this->NYs=this->ImTemplate[0].NY;
+	this->NZs=this->ImTemplate[0].NZ;
+  
+	cout << "Image size: " << this->NX <<  "*"  <<  this->NY  <<  "*"  << this->NZ  << " (source: " << this->NXs <<  "*"  <<  this->NYs  <<  "*"  << this->NZs  << ")\n";
+	
+  //2.5) compute the quaternion to convert target coordinates into template coordinates
+  mult_quat4t4mat_quat4t4mat(World_Target2Template,this->ImTarget[0].Image2World,tempQuat);
+  mult_quat4t4mat_quat4t4mat(this->ImTemplate[0].World2Image,tempQuat,Target2TemplateCoord);
+  
+  cout << endl;
+  
+    cout << "Target to template in voxel coordinates:" << endl;
+    for (i=0;i<4;i++){
+      for (j=0;j<4;j++){
+        cout << Target2TemplateCoord[i][j] << " ";
+      }
+      cout << endl;
+    }
+  
+  
+  //2.6 compute the voxels size in mm
+  this->x_mm=sqrt(this->ImTarget[0].Image2World[0][0]*this->ImTarget[0].Image2World[0][0]+this->ImTarget[0].Image2World[0][1]*this->ImTarget[0].Image2World[0][1]+this->ImTarget[0].Image2World[0][2]*this->ImTarget[0].Image2World[0][2]);
+  this->y_mm=sqrt(this->ImTarget[0].Image2World[1][0]*this->ImTarget[0].Image2World[1][0]+this->ImTarget[0].Image2World[1][1]*this->ImTarget[0].Image2World[1][1]+this->ImTarget[0].Image2World[1][2]*this->ImTarget[0].Image2World[1][2]);
+  this->z_mm=sqrt(this->ImTarget[0].Image2World[2][0]*this->ImTarget[0].Image2World[2][0]+this->ImTarget[0].Image2World[2][1]*this->ImTarget[0].Image2World[2][1]+this->ImTarget[0].Image2World[2][2]*this->ImTarget[0].Image2World[2][2]);
+  
+  cout << endl;
+  cout << "Target image resolution: " << this->x_mm << " "  << this->y_mm << " "  << this->z_mm << endl;
+
+	//3) TAKING INTO ACCOUNT THE MARGINS:  !!! this->Margin  !!!
+	
+  // to do ?
+  
+  
+	//4) COMPUTE THE MAPPING (in from the target c.s. to the source c.s.)
+  // ... removed
+  
+	//5) LINEAR ALIGNMENT OF THE GREY LEVELS OF ImTarget ON THOSE OF ImTemplate
+	int NbVoxelsOK;
+	
+	if (GreyLevAlign!=0) for (i=0;i<1;i++){
+		//compute mean and std dev of the source and target images
+		mean1=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->NZs; z++)  for (y = 0; y < this->NYs; y++) for (x = 0; x < this->NXs; x++) if (this->ImTemplate[i].G(x,y,z)>GLA_Padding_Src){
+			mean1+=(double)this->ImTemplate[i].G(x,y,z);
+			NbVoxelsOK++;
+		}
+		mean1/=(double)(NbVoxelsOK);
+		
+		mean2=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTarget[i].G(x,y,z)>GLA_Padding_Trg){
+			mean2+=(double)this->ImTarget[i].G(x,y,z);
+			NbVoxelsOK++;
+		}
+		mean2/=(double)(NbVoxelsOK);
+		
+		std1=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->NZs; z++)  for (y = 0; y < this->NYs; y++) for (x = 0; x < this->NXs; x++) if (this->ImTemplate[i].G(x,y,z)>GLA_Padding_Src){
+			std1+=pow((double)this->ImTemplate[i].G(x,y,z)-mean1,2.);
+			NbVoxelsOK++;
+		}
+		std1/=(double)(NbVoxelsOK);
+		std1=sqrt(std1);
+		
+		std2=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTarget[i].G(x,y,z)>GLA_Padding_Trg){
+			std2+=pow((double)this->ImTarget[i].G(x,y,z)-mean2,2.);
+			NbVoxelsOK++;
+		}
+		std2/=(double)(NbVoxelsOK);
+		std2=sqrt(std2);
+		
+		cout << "Template: mean=" << mean1 << ", stddev=" << std1 << ".    Target: mean=" << mean2 << ", stddev=" << std2 << "\n";
+		
+		
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+			this->ImTarget[i].P((this->ImTarget[i].G(x,y,z)-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1,x,y,z);
+		
+		
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+			if ((this->ImTarget[i].G(x,y,z)<(GLA_Padding_Trg-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1)||(this->ImTarget[i].G(x,y,z)<GLA_Padding_Src))
+				this->ImTarget[i].P(0.,x,y,z);
+	}
+	
+
+  //6) LOAD THE DEFORMATION FIELD OR DISPLACEMENT FIELD
+	//    -->  DisplField.G(0,x,y,z,i)= direction ex of the vector at (x,y,z)
+	//    -->  DisplField.G(1,x,y,z,i)= direction ey of the vector at (x,y,z)
+	//    -->  DisplField.G(2,x,y,z,i)= direction ez of the vector at (x,y,z)
+	//         or 
+  //    -->  VelocityField.G(0,x,y,z,i)= direction ex of the vector at (x,y,z)
+	//    -->  VelocityField.G(1,x,y,z,i)= direction ey of the vector at (x,y,z)
+	//    -->  VelocityField.G(2,x,y,z,i)= direction ez of the vector at (x,y,z)
+	if (strcmp(PrefixInputs,"Null")!=0){
+      this->LoadVelocityField(PrefixInputs);   //! the velocity field is put in VelocityField !
+  }
+	else{
+    this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ);
+    this->VelocityField_LFreq.CreateVoidField(this->NX,this->NY,this->NZ);
+  }
+  this->VelocityField_ID.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  
+  
+  //7) READ THE MASK
+  if (strcmp(this->MaskFile,"Null")!=0){
+    this->Mask.Read(this->MaskFile);
+  }
+  else{
+    this->Mask.Read(this->SourceFiles[0]);
+    
+    for (z = 0; z < this->Mask.NZ; z++)  for (y = 0; y < this->Mask.NY; y++) for (x = 0; x < this->Mask.NX; x++)
+      this->Mask.P(1,x,y,z);
+  }
+  
+  if ((ImTemplate[0].NX!=this->Mask.NX)) cout << "The source image and the mask do not have the same size!!!";
+  if ((ImTemplate[0].NY!=this->Mask.NY)) cout << "The source image and the mask do not have the same size!!!";
+  if ((ImTemplate[0].NZ!=this->Mask.NZ)) cout << "The source image and the mask do not have the same size!!!";
+  
+  int TempIdInMask[10000];
+  for (i=0;i<10000;i++) TempIdInMask[i]=0;
+  
+  for (z = 0; z < this->Mask.NZ; z++)  for (y = 0; y < this->Mask.NY; y++) for (x = 0; x < this->Mask.NX; x++){
+    TempIdInMask[static_cast<int>(this->Mask.G(x,y,z)+0.00001)]=1;
+  }
+  
+  this->NbIdInMask=0;
+  for (i=0;i<10000;i++) 
+    if (TempIdInMask[i]==1)
+      this->NbIdInMask++;
+  
+  this->IdInMask=new float[this->NbIdInMask];
+  
+  this->NbIdInMask=0;
+  for (i=1;i<10000;i++) 
+    if (TempIdInMask[i]==1){
+      this->IdInMask[this->NbIdInMask]=static_cast<float>(i);
+      this->NbIdInMask++;
+      cout << "Region in the mask: " << i << "\n";
+    }
+  
+  
+}
+
+///allocate all variables used for the gradient descent
+void LargeDefPWDemons::AllocateAllVariables(void){
+  int i;
+	
+  //contains the gradient of Energy. Is directely used to update the Displacement Field
+  this->GradE.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //manage the mutual information
+  if (IndicatorMI==1){
+    ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->TempImage);
+    ProjectImageUsingSteadyVeloField(&this->VelocityField_LFreq,&this->TempImage,&this->DeformedTemplate);
+    
+    ProjectImageUsingInverseSteadyVeloField(&this->VelocityField_ID,&this->ImTarget[0],&this->DeformedTarget);
+    
+    this->NorMutInfMan.Initiate(&this->DeformedTemplate,&this->DeformedTarget,50,50,3);
+  }
+  
+  
+  //Projected mask and distance to the boundary
+  if (this->WhichLF_HF==2){
+    this->ProjMask.CreateVoidField(this->NX,this->NY,this->NZ);
+    this->NearestBoundary.CreateVoidField(this->NX,this->NY,this->NZ);
+    this->TempSF.CreateVoidField(this->NX,this->NY,this->NZ);
+  }
+  
+
+}
+
+
+
+
+///save the result of the gradient descent
+void LargeDefPWDemons::SaveResultGradientDescent(void){
+  VectorField RealDisplacementField1;
+  VectorField RealDisplacementField2;
+  int i,j;
+  float TempQuat_T[4][4];
+  float TempQuat_S[4][4];
+  
+  
+  //2) save the results...
+  
+  //save the velocity field
+  this->SaveVelocityField(&this->VelocityField,&this->VelocityField_LFreq,this->PrefixOutputs);
+  
+  //save the final deformation
+  this->SaveDeformations(this->PrefixOutputs);
+  
+
+  //save the inverse deformation field
+  RealDisplacementField1.CreateVoidField(this->NX,this->NY,this->NZ);
+  CptInvDefFromSteadyVeloField(&this->VelocityField,&RealDisplacementField1,7);
+  
+  RealDisplacementField2.CreateVoidField(this->NX,this->NY,this->NZ);
+  CptInvDefFromSteadyVeloField(&this->VelocityField_LFreq,&RealDisplacementField2,7);
+  
+  
+  this->SaveInvTotalDisplacement(&RealDisplacementField1,&RealDisplacementField2,this->PrefixOutputs);
+  
+  
+    
+  
+	
+
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                          FUNCTIONS TO SAVE AND LOAD THE VARIOUS STRUCTURES
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+///load the velocity fields
+void LargeDefPWDemons::LoadVelocityField(char Prefix[256]){
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char DisplacementField_X[256];
+	char DisplacementField_Y[256];
+	char DisplacementField_Z[256];
+
+	//1) High frequencies
+	strcpy(FileNameX,Prefix);
+	strcpy(DisplacementField_X,"_VelocityField_X.nii");
+	strcat(FileNameX,DisplacementField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(DisplacementField_Y,"_VelocityField_Y.nii");
+	strcat(FileNameY,DisplacementField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(DisplacementField_Z,"_VelocityField_Z.nii");
+	strcat(FileNameZ,DisplacementField_Z);
+	
+	this->VelocityField.Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+
+	//2) Low frequencies
+	strcpy(FileNameX,Prefix);
+	strcpy(DisplacementField_X,"_VelocityField_LF_X.nii");
+	strcat(FileNameX,DisplacementField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(DisplacementField_Y,"_VelocityField_LF_Y.nii");
+	strcat(FileNameY,DisplacementField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(DisplacementField_Z,"_VelocityField_LF_Z.nii");
+	strcat(FileNameZ,DisplacementField_Z);
+	
+	this->VelocityField_LFreq.Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+  
+
+}
+
+
+
+///save the inverse deformation field
+void LargeDefPWDemons::SaveInvTotalDisplacement(VectorField * LocDisplacementField1,VectorField * LocDisplacementField2,char Prefix[256]){
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char InvDisplacementField_X[256];
+	char InvDisplacementField_Y[256];
+	char InvDisplacementField_Z[256];
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tmpX2,tmpY2,tmpZ2;
+  float tempQuat[4][4];
+  int x,y,z;
+  float flX,flY,flZ;
+  
+	//intialisation
+	strcpy(FileNameX,Prefix);
+	strcpy(InvDisplacementField_X,"_DispField_Trg2Src_X.nii");
+	strcat(FileNameX,InvDisplacementField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(InvDisplacementField_Y,"_DispField_Trg2Src_Y.nii");
+	strcat(FileNameY,InvDisplacementField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(InvDisplacementField_Z,"_DispField_Trg2Src_Z.nii");
+	strcat(FileNameZ,InvDisplacementField_Z);
+	
+  
+  
+  
+  
+    //compute the inverse of the total displacement field in mm (world coordinate)
+    mult_quat4t4mat_quat4t4mat(World_Target2Template,this->ImTarget[0].Image2World,tempQuat);
+    
+    //compute the mapping
+    for (z = 0; z < LocDisplacementField1->NZ; z++)  for (y = 0; y < LocDisplacementField1->NY; y++) for (x = 0; x < LocDisplacementField1->NX; x++){
+      trgX=x*this->ImTarget[0].Image2World[0][0]+y*this->ImTarget[0].Image2World[0][1]+z*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+      trgY=x*this->ImTarget[0].Image2World[1][0]+y*this->ImTarget[0].Image2World[1][1]+z*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+      trgZ=x*this->ImTarget[0].Image2World[2][0]+y*this->ImTarget[0].Image2World[2][1]+z*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+      
+      tmpX2=x+LocDisplacementField2->G(0,x,y,z);
+      tmpY2=y+LocDisplacementField2->G(1,x,y,z);
+      tmpZ2=z+LocDisplacementField2->G(2,x,y,z);
+      
+      tmpX=tmpX2+LocDisplacementField1->G(0,tmpX2,tmpY2,tmpZ2);
+      tmpY=tmpY2+LocDisplacementField1->G(1,tmpX2,tmpY2,tmpZ2);
+      tmpZ=tmpZ2+LocDisplacementField1->G(2,tmpX2,tmpY2,tmpZ2);
+      
+      srcX=tmpX*tempQuat[0][0]+tmpY*tempQuat[0][1]+tmpZ*tempQuat[0][2]+tempQuat[0][3];
+      srcY=tmpX*tempQuat[1][0]+tmpY*tempQuat[1][1]+tmpZ*tempQuat[1][2]+tempQuat[1][3];
+      srcZ=tmpX*tempQuat[2][0]+tmpY*tempQuat[2][1]+tmpZ*tempQuat[2][2]+tempQuat[2][3];
+      
+      LocDisplacementField2->P(srcX-trgX,0,x,y,z);
+      LocDisplacementField2->P(srcY-trgY,1,x,y,z);
+      LocDisplacementField2->P(srcZ-trgZ,2,x,y,z);
+    }
+	
+  
+  //save the deformation field
+	LocDisplacementField2->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+}
+
+///save the Velocity field
+void LargeDefPWDemons::SaveVelocityField(VectorField * LocVelocityField,VectorField * LocVelocityField_LF,char Prefix[256]){
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char VelocityField_X[256];
+	char VelocityField_Y[256];
+	char VelocityField_Z[256];
+  
+	//intialisation - H freq
+	strcpy(FileNameX,Prefix);
+	strcpy(VelocityField_X,"_VelocityField_X.nii");
+	strcat(FileNameX,VelocityField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(VelocityField_Y,"_VelocityField_Y.nii");
+	strcat(FileNameY,VelocityField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(VelocityField_Z,"_VelocityField_Z.nii");
+	strcat(FileNameZ,VelocityField_Z);
+
+	//save the Velocity field - H freq
+	LocVelocityField->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+
+
+	//intialisation - L freq
+	strcpy(FileNameX,Prefix);
+	strcpy(VelocityField_X,"_VelocityField_LF_X.nii");
+	strcat(FileNameX,VelocityField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(VelocityField_Y,"_VelocityField_LF_Y.nii");
+	strcat(FileNameY,VelocityField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(VelocityField_Z,"_VelocityField_LF_Z.nii");
+	strcat(FileNameZ,VelocityField_Z);
+  
+	//save the Velocity field - L freq
+	LocVelocityField_LF->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+  
+}
+
+///save the deformations in time subdivisions (not the convergence)
+void LargeDefPWDemons::SaveDeformations(char Prefix[256]){
+  char FileName[256];
+	char Deformation[256];
+
+  
+	//deformed image
+  strcpy(Deformation,"_FinalDefSrc.nii");
+  strcpy(FileName,Prefix);
+  strcat(FileName,Deformation);
+    
+  
+  ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->TempImage);
+  ProjectImageUsingSteadyVeloField(&this->VelocityField_LFreq,&this->TempImage,&this->DeformedTemplate);
+  
+  this->DeformedTemplate.Write(FileName,this->TargetFiles[0]);
+}
+
+
+
+///compute the update vector field
+void LargeDefPWDemons::ComputeUpdateFieldSSD(int Step){
+  float locCoef;
+  float locCoef2;
+  int x,y,z;
+  float epsilon;
+  float TempSSD,TempNbPts;
+  
+  //init variables and gradient
+  epsilon=0.0001;
+  
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    this->GradE.P(0,0,x,y,z);
+    this->GradE.P(0,1,x,y,z);
+    this->GradE.P(0,2,x,y,z);
+  }
+  
+  
+  //project the source image in DeformedTemplate 
+  //compute the temporary deformed template
+  
+  
+  //compute the current deformed source image
+  if (Step==1){
+    ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->TempImage);
+    ProjectImageUsingSteadyVeloField(&this->VelocityField_LFreq,&this->TempImage,&this->DeformedTemplate);
+    
+    ProjectImageUsingInverseSteadyVeloField(&this->VelocityField_ID,&this->ImTarget[0],&this->DeformedTarget);
+  }
+  else{
+    ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+    
+    ProjectImageUsingInverseSteadyVeloField(&this->VelocityField_LFreq,&this->ImTarget[0],&this->DeformedTarget);
+  }
+  
+  
+  //compute the temporary gradient of the deformed template
+  Cpt_Grad_ScalarField(&this->DeformedTemplate,&this->GradE);
+  
+  float Av1st_term;
+  float Av2nd_term;
+  int NbPts;
+  
+  Av1st_term=0;
+  Av2nd_term=0;
+  NbPts=0;
+  
+  //compute the SSD
+  TempSSD=0;
+  
+  if (this->NZ>1) for (z = 1+this->Margin; z < this->NZ-1-this->Margin; z++)  for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    TempSSD+=(this->DeformedTarget.G(x,y,z)-this->DeformedTemplate.G(x,y,z))*(this->DeformedTarget.G(x,y,z)-this->DeformedTemplate.G(x,y,z));
+    TempNbPts++;
+  }
+
+  if (this->NZ==1) for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    TempSSD+=(this->DeformedTarget.G(x,y)-this->DeformedTemplate.G(x,y))*(this->DeformedTarget.G(x,y)-this->DeformedTemplate.G(x,y));
+    TempNbPts++;
+  }
+  
+  TempSSD=sqrt(TempSSD)/TempNbPts;
+  
+  cout << "SSD = " << TempSSD << endl;
+  
+  
+  
+  //multiply the temporary gradient by the difference between the target and deformed images AND normalize the temporary gradient (3D IMAGE)
+  if (this->NZ>1) for (z = 1+this->Margin; z < this->NZ-1-this->Margin; z++)  for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    locCoef=-(this->DeformedTarget.G(x,y,z)-this->DeformedTemplate.G(x,y,z));
+    locCoef2=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+    
+    
+    if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+      locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+      Av1st_term+=locCoef2;
+      Av2nd_term+=locCoef*locCoef;
+      NbPts++;
+    }
+    else 
+      locCoef=0;
+      
+    this->GradE.P(this->GradE.G(0,x,y,z)*locCoef,0,x,y,z);
+    this->GradE.P(this->GradE.G(1,x,y,z)*locCoef,1,x,y,z);
+    this->GradE.P(this->GradE.G(2,x,y,z)*locCoef,2,x,y,z);
+  }
+  
+  //multiply the temporary gradient by the difference between the target and deformed images AND normalize the temporary gradient (2D IMAGE)
+  if (this->NZ==1) for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    locCoef=-(this->DeformedTarget.G(x,y)-this->DeformedTemplate.G(x,y));
+    locCoef2=this->GradE.G(0,x,y)*this->GradE.G(0,x,y)+this->GradE.G(1,x,y)*this->GradE.G(1,x,y)+this->GradE.G(2,x,y)*this->GradE.G(2,x,y);
+    
+    
+    if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+      locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+      Av1st_term+=locCoef2;
+      Av2nd_term+=locCoef*locCoef;
+      NbPts++;
+    }
+    else 
+      locCoef=0;
+    
+    this->GradE.P(this->GradE.G(0,x,y)*locCoef,0,x,y);
+    this->GradE.P(this->GradE.G(1,x,y)*locCoef,1,x,y);
+    this->GradE.P(this->GradE.G(2,x,y)*locCoef,2,x,y);
+  }
+  
+  //mask the image if required
+  if (MaskDefined==1)
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) 
+      if (fabs(Mask.G(x,y,z)-MaskID)>0.01){
+        this->GradE.P(0,0,x,y);
+        this->GradE.P(0,1,x,y);
+        this->GradE.P(0,2,x,y);
+    }
+  
+}
+
+
+
+
+///compute the update vector field
+void LargeDefPWDemons::ComputeUpdateFieldMI(int Step){
+  float evaMI;
+  int x,y,z;
+  
+  
+  //compute the current deformed source image
+  if (Step==1){
+    ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->TempImage);
+    ProjectImageUsingSteadyVeloField(&this->VelocityField_LFreq,&this->TempImage,&this->DeformedTemplate);
+    
+    ProjectImageUsingInverseSteadyVeloField(&this->VelocityField_ID,&this->ImTarget[0],&this->DeformedTarget);
+  }
+  else{
+    ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+    
+    ProjectImageUsingInverseSteadyVeloField(&this->VelocityField_LFreq,&this->ImTarget[0],&this->DeformedTarget);
+  }
+  
+  
+  
+  this->NorMutInfMan.IndicateSrcHasChanged();
+  
+  //compute the mutual information and update the histograms
+  this->NorMutInfMan.IndicateSrcHasChanged();
+  evaMI=this->NorMutInfMan.EvaluateMI();
+  cout << "MI: " << evaMI << endl;
+  
+  
+  //evaluate the gradient of mutual information
+  this->NorMutInfMan.EvaluateGradMI(&this->GradE);
+  
+  
+  //mask the image if required
+  if (MaskDefined==1)
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) 
+      if (fabs(Mask.G(x,y,z)-MaskID)>0.01){
+        this->GradE.P(0,0,x,y);
+        this->GradE.P(0,1,x,y);
+        this->GradE.P(0,2,x,y);
+      }
+  
+}
+
+
+
+///control the maximum update. 
+///* if the max update is larger than the initial one -> normalisation of all the update field to this->MaxUpdateAllowed
+///* Othewise -> normalisation of all the update field to this->MaxUpdateAllowed*(max/InitMaxUpdate)
+void LargeDefPWDemons::ControlMaxUpdate(int IterationNb,int Step){
+  float max;
+  int direc,x,y,z;
+  float factor;
+  
+  max=0;
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    if (max<this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z))
+      max=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+  
+  max=sqrt(max);
+  
+  if (IterationNb==0){
+    if (Step==1) this->InitMaxUpdateLW=max;
+    else this->InitMaxUpdateHW=max;
+  }
+  
+  if (Step==1) {
+    if (max>this->InitMaxUpdateLW) factor=this->MaxUpdateAllowed/max;
+    else factor=this->MaxUpdateAllowed/this->InitMaxUpdateLW;
+  }
+  else{
+    if (max>this->InitMaxUpdateHW) factor=this->MaxUpdateAllowed/max;
+    else factor=this->MaxUpdateAllowed/this->InitMaxUpdateHW;
+  }
+  
+  
+  for (direc = 0; direc < 3; direc++) for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) 
+    this->GradE.P(this->GradE.G(direc,x,y,z)*factor,direc,x,y,z);
+}
+
+
+///Compute the projected map 'ProjMask' / 'TempSF' / the distance map 'NearestBoundary' by considering the low frequency deformation
+void LargeDefPWDemons::ComputeNearestBounda_TempSF_ProjMask(){
+	int i,j;
+  
+  //project the mask
+  ProjectImageUsingAffineTransfoAndSteadyVeloField(this->Target2TemplateCoord,&this->VelocityField_ID,&this->Mask,&this->ProjMask);
+  
+  //compute the distance map
+  cout << "Compute the distance map" << endl;
+  if (this->NZ>1) Cpt_NearestBoundaryOLD(&this->ProjMask,&this->NearestBoundary,&this->TempSF,30,this->NbIdInMask,this->IdInMask,this->x_mm,this->y_mm,this->z_mm,0);
+  else Cpt_NearestBoundary2D(&this->ProjMask,&this->NearestBoundary,&this->TempSF,this->NbIdInMask,this->IdInMask,this->x_mm,this->y_mm);
+  
+  //smooth the distance map
+  for (i=0;i<this->NbIdInMask;i++) for (j=0;j<3;j++){
+    Diffusion_3D(&this->NearestBoundary,&this->ProjMask,this->IdInMask[i],1,3,9,0,j,this->x_mm,this->y_mm,this->z_mm);
+  }
+  Diffusion_3D(&this->NearestBoundary,1, 3,1,this->x_mm,this->y_mm,this->z_mm);
+  
+  cout << "Distance map computed" << endl;
+  
+}  
+
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                      RUN FUNCTIONS
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+///Function to solve the registration using the gradient descent algorithm of Beg 05
+void LargeDefPWDemons::Run_Default(void){
+	int IterationNb;
+  
+	
+	//1) INITIALISATION
+	
+	//1.1) Pre-treatment of the inuput images (grey level alignment + margins)
+	this->ReadAndTreatInputImages();
+	
+	//1.2) Allocations of the scalar and vector fields + definition of global parameters
+	this->AllocateAllVariables();
+	
+  //1.3) Project the mask containing the regions if required
+  if (this->WhichLF_HF==2) ComputeNearestBounda_TempSF_ProjMask();
+	
+	//2) GRADIENT DESCENT
+	for (IterationNb=0;IterationNb<this->iteration_nb;IterationNb++){
+		cout << "Iteration Number " << IterationNb+1 << " / " << this->iteration_nb << "\n";
+		
+    //2.1) LOW FREQUENCIES
+    if (this->WhichLF_HF==1){
+      //2.1.1) Compute the gradient
+      if (IndicatorMI==1)
+        this->ComputeUpdateFieldMI(1);
+      else{
+        this->ComputeUpdateFieldSSD(1);
+      }
+      
+      //2.1.2) smooth the gradient... 
+      Diffusion_3D(&this->GradE,1, Update_TimeSmooth / static_cast<float>(Update_NbSubdiv),Update_NbSubdiv,this->x_mm,this->y_mm,this->z_mm);
+      
+      //2.1.3) control the maximum amplitude of update
+      this->ControlMaxUpdate(IterationNb,1);
+      
+      //2.1.4) update the transformation
+      //ComposeTwoLogFieldsUsingBCH(&this->VelocityField,&this->GradE);
+      ComposeTwoLogFieldsUsingSum(&this->VelocityField_LFreq,&this->GradE);
+      
+      //2.1.5) smooth the deformation
+      if (DefField_TimeSmooth>0.00125){ //equivalent to a Gaussian Kernel 0.05 voxel
+        Diffusion_3D(&this->VelocityField_LFreq,1, DefField_TimeSmooth / static_cast<float>(DefField_NbSubdiv),DefField_NbSubdiv,this->x_mm,this->y_mm,this->z_mm);
+      }
+    }
+    
+    //2.1) HIGH FREQUENCIES
+    
+    if (this->WhichLF_HF==2){
+      //2.1.1) Compute the gradient
+      if (IndicatorMI==1)
+        this->ComputeUpdateFieldMI(2);
+      else{
+        this->ComputeUpdateFieldSSD(2);
+      }
+      
+      //2.1.2) smooth the gradient... 
+      //Diffusion_3D(&this->GradE,1, Update_TimeSmooth / static_cast<float>(Update_NbSubdiv),Update_NbSubdiv,this->x_mm,this->y_mm,this->z_mm);
+      cout << "SmoothWithinRegionsWithSliding" << endl;
+      SmoothWithinRegions2(&this->GradE,&this->ProjMask,Update_TimeSmooth / static_cast<float>(Update_NbSubdiv),Update_NbSubdiv,this->NbIdInMask,this->IdInMask,&this->NearestBoundary,&this->TempSF,x_mm,y_mm,z_mm,1);
+      
+      
+      //2.1.3) control the maximum amplitude of update
+      this->ControlMaxUpdate(IterationNb,2);
+      
+      //2.1.4) update the transformation
+      //ComposeTwoLogFieldsUsingBCH(&this->VelocityField,&this->GradE);
+      ComposeTwoLogFieldsUsingSum(&this->VelocityField,&this->GradE);
+      
+      //2.1.5) smooth the deformation
+      if (DefField_TimeSmooth>0.00125){ //equivalent to a Gaussian Kernel 0.05 voxel
+        //Diffusion_3D(&this->VelocityField,1, DefField_TimeSmooth / static_cast<float>(DefField_NbSubdiv),DefField_NbSubdiv,this->x_mm,this->y_mm,this->z_mm);
+        cout << "SmoothWithinRegions" << endl;
+        SmoothWithinRegions(&this->VelocityField,&this->ProjMask,DefField_TimeSmooth / static_cast<float>(DefField_NbSubdiv),DefField_NbSubdiv,this->NbIdInMask,this->IdInMask,x_mm,y_mm,z_mm,1);
+      }
+    }
+    
+  }
+	
+	//3) SAVE THE RESULTS
+	this->SaveResultGradientDescent();
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                        MAIN RUN FUNCTION 
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///run function
+void LargeDefPWDemons::Run(void)
+{
+  this->Run_Default();
+}
+

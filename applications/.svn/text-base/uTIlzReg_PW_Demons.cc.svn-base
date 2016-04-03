@@ -1,0 +1,228 @@
+/*=========================================================================
+ 
+ Date      : $Date: 29.04.2010$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+
+#include <PW_Demons.h>
+
+void usage(){
+	cerr << "Usage: uTIlzReg_Demons [Source] [Target] <options>\n";
+	cerr << "Where <options> are one or more of the following:\n";
+	cerr << "  Primary options:\n";
+	cerr << "    <-iterations n>          Number of iterations (default=10)\n";
+	cerr << "    <-UnderSampleTrg n>      Undersample the target image with the factor n (default n = 1)\n";
+	cerr << "    <-Update_LF_or_HF n>     Only update the low freq. (n=1) or the high frequencies (n=2) (default n = 1)\n";
+  cerr << "  Inputs and Outputs:\n";
+	cerr << "    <-PrefixInputs n>        Prefix of the files containing an initial velocity field (default=\"Null\")\n";
+	cerr << "    <-PrefixOutputs n>       Prefix of the files containing the outputs (default=\"Outputs\")\n";
+  cerr << "    <-Mask n>                Mask containing the different regions (default=\"Null\")    \n";
+	cerr << "    <-affineT n>             Affine transfo from Trg to Src in the world domain. The 4*3 parameters are: r_xx r_xy r_xz t_x  r_yx ... t_z\n";
+  cerr << "  Kernels    (the Gaussian kernel of std dev 's' is equivalent to '(s^2)/2' time units of diffusion):\n";
+	cerr << "    <-Gauss_fluid s n>       Gaussian kernel for the fluid regularisation and nb of time subdiv. (default=[20 2])\n";
+	cerr << "    <-Gauss_diffusion s n>   Gaussian kernel for the diffusion reg (0 -> no dif.) + nb time subdiv. (default=[0.0 1])\n";
+  cerr << "  Secondary options:\n";
+	cerr << "    <-MI>                    Minimize the mutual information instead of the sum of squared differences\n";
+  cerr << "    <-MaxVeloUpdt n>         Maximum update at each iteration (default=0.5 voxels)\n";
+  cerr << "    <-BoundaryMargin n>      If there are more than 1 region, margin of the boundaries (default=3 voxels)\n";
+	cerr << "    <-ExpendDomain n>        Extend the domain of the target image, where the computations are done (n = x1 x2 y1 y2 z1 z2 / default = null)\n";
+	cerr << "    <-GreyLevAlign n>        Grey level linear alignment (Inputs: Padding Src - Padding Trg)\n";
+	cerr << "    <-margins n>             Margin of the image where the calculations are reduced  (default=0 voxels)\n";
+	cerr << "    <-lambdaX n>             Value of lambdaX (default=1)\n";
+	cerr << "  \n";
+	
+	exit(1);
+}
+
+int main(int argc, char **argv){
+	LargeDefPWDemons DefDemons;
+	bool ok;
+  int tmp,i;
+  float Gauss_diffusion,Gauss_fluid;
+  
+  
+	// Check command line
+	if (argc < 3) {
+		usage();
+	}
+	
+	// Read the name of input and output images
+	strcpy(DefDemons.SourceFiles[0],argv[1]);
+	argc--;  argv++;
+	strcpy(DefDemons.TargetFiles[0],argv[1]);
+	argc--;  argv++;
+  
+  
+	// Parse remaining parameters
+	while (argc > 1) {
+		//1 - Primary options
+		ok = false;
+		if ((ok == false) && (strcmp(argv[1], "-iterations") == 0)) {
+			argc--; argv++;
+			DefDemons.iteration_nb = atoi(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+//		if ((ok == false) && (strcmp(argv[1], "-alpha") == 0)) {  //removed because redondant with the time lengths of smoothing
+//			argc--; argv++;
+//			DefDemons.alpha = atof(argv[1]);
+//			argc--; argv++;
+//			ok = true;
+//		}
+		if ((ok == false) && (strcmp(argv[1], "-Gauss_diffusion") == 0)){
+			argc--; argv++;
+			Gauss_diffusion = atof(argv[1]);
+      DefDemons.DefField_TimeSmooth=Gauss_diffusion*Gauss_diffusion/2;
+			argc--; argv++;
+			DefDemons.DefField_NbSubdiv = atoi(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-Gauss_fluid") == 0)) {
+			argc--; argv++;
+			Gauss_fluid = atof(argv[1]);
+      DefDemons.Update_TimeSmooth=Gauss_fluid*Gauss_fluid/2;
+			argc--; argv++;
+			DefDemons.Update_NbSubdiv = atoi(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-MaxVeloUpdt") == 0)) {
+			argc--; argv++;
+			DefDemons.MaxUpdateAllowed = atof(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-lambdaX") == 0)) {
+			argc--; argv++;
+			DefDemons.lambdaX = atof(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-MI") == 0)) {
+			argc--; argv++;
+			DefDemons.IndicatorMI = 1;
+			ok = true;
+		}
+    //2 - Inputs and Outputs
+		if ((ok == false) && (strcmp(argv[1], "-PrefixInputs") == 0)) {
+			argc--; argv++;
+			strcpy(DefDemons.PrefixInputs,argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-PrefixOutputs") == 0)) {
+			argc--; argv++;
+			strcpy(DefDemons.PrefixOutputs,argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		
+    if ((ok == false) && (strcmp(argv[1], "-affineT") == 0)) {
+			argc--; argv++;
+      DefDemons.World_Target2Template[0][0]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[0][1]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[0][2]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[0][3]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[1][0]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[1][1]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[1][2]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[1][3]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[2][0]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[2][1]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[2][2]=atof(argv[1]);
+			argc--; argv++;
+      DefDemons.World_Target2Template[2][3]=atof(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+    
+    
+		//4 - Secondary options
+		if ((ok == false) && (strcmp(argv[1], "-GreyLevAlign") == 0)) {
+			argc--; argv++;
+			DefDemons.GreyLevAlign = 1;
+			DefDemons.GLA_Padding_Src = atof(argv[1]);
+			argc--; argv++;
+			DefDemons.GLA_Padding_Trg = atof(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-margins") == 0)) {
+			argc--; argv++;
+			DefDemons.Margin = atoi(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-Update_LF_or_HF") == 0)) {
+			argc--; argv++;
+			DefDemons.WhichLF_HF = atoi(argv[1]);
+			argc--; argv++;
+      if (DefDemons.WhichLF_HF<1) DefDemons.WhichLF_HF=1;
+      if (DefDemons.WhichLF_HF>2) DefDemons.WhichLF_HF=2;
+			ok = true;
+		}
+    if ((ok == false) && (strcmp(argv[1], "-BoundaryMargin") == 0)) {
+			argc--; argv++;
+			DefDemons.BoundaryMargin = atoi(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-Mask") == 0)) {
+			argc--; argv++;
+      strcpy(DefDemons.MaskFile,argv[1]);
+			DefDemons.MaskDefined = 1;
+			argc--; argv++;
+			ok = true;
+		}
+		if ((ok == false) && (strcmp(argv[1], "-UnderSampleTrg") == 0)) {
+			argc--; argv++;
+			DefDemons.UnderSampleTrgFactor = atof(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+    if ((ok == false) && (strcmp(argv[1], "-ExpendDomain") == 0)) {
+			argc--; argv++;
+			DefDemons.ExtendTrgImag_LowerX = atoi(argv[1]);
+			argc--; argv++;
+			DefDemons.ExtendTrgImag_UpperX = atoi(argv[1]);
+			argc--; argv++;
+			DefDemons.ExtendTrgImag_LowerY = atoi(argv[1]);
+			argc--; argv++;
+			DefDemons.ExtendTrgImag_UpperY = atoi(argv[1]);
+			argc--; argv++;
+			DefDemons.ExtendTrgImag_LowerZ = atoi(argv[1]);
+			argc--; argv++;
+			DefDemons.ExtendTrgImag_UpperZ = atoi(argv[1]);
+			argc--; argv++;
+			ok = true;
+		}
+		
+    if (ok == false) usage();
+	}
+	
+  
+	//run process
+	cout << "Registration using ";
+  if (DefDemons.IndicatorMI==1) cout << "mutual information-based ";
+  cout << "LogDemons ";
+  if (DefDemons.WhichLF_HF==1) cout << "(Low frequencies) ";
+  if (DefDemons.WhichLF_HF==2) cout << "(High frequencies) ";
+  cout << " ... \n"; cout.flush();
+	DefDemons.Run();
+	cout << "done" << endl;
+	
+	return 0;
+}

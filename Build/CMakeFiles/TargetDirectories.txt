@@ -1,0 +1,4 @@
+/home/lrisser/Softwares/TV2016/Build/CMakeFiles/CurvesAna.dir
+/home/lrisser/Softwares/TV2016/Build/lib/src/CMakeFiles/SciCalcPack.dir
+/home/lrisser/Softwares/TV2016/Build/lib/nifti/niftilib/CMakeFiles/niftiio.dir
+/home/lrisser/Softwares/TV2016/Build/lib/nifti/znzlib/CMakeFiles/znz.dir

@@ -1,0 +1,1599 @@
+/*=========================================================================
+
+Author: Laurent Risser
+
+Disclaimer: This software has been developed for research purposes only, and hence should 
+not be used as a diagnostic tool. In no event shall the authors or distributors
+be liable to any direct, indirect, special, incidental, or consequential 
+damages arising of the use of this software, its documentation, or any 
+derivatives thereof, even if the authors have been advised of the possibility 
+of such damage. 
+
+=========================================================================*/
+
+
+#include <SciCalcPack.h>
+
+
+
+///Reestimate the coordinates of the element 'IdEl' of the segment 'IdSeg' in 'PointsIn'. The image is in 'ImageIn' and the 
+///threshold between the background and foreground is 'thresh'.
+///AverageBG is the average grey level of the BackGround within the cochlea
+///AverageSF is the average grey level of the Small Features within the cochlea
+///AverageFG is the average grey level of the ForeGround <- tissues outside of the cochlea
+void GradientCenterLineEstim(ScalarField * ImageIn,float AverageBG,float AverageSF,float AverageFG,LDMK_Curves * PointsIn,LDMK_Curves * GradientCoord){
+  float xloc,yloc,zloc;
+  float xloc2,yloc2,zloc2;
+  float nvecloc[3];
+  float vec1[3];
+  float vec2[3];
+  float vec3[3];
+  float T1_vec3[3];
+  float T2_vec3[3];
+  float epsilon,dist,tmpfl;
+  float VoxStep;
+  float thresh1,thresh2;
+  int iterations;
+  float rotLoc;
+  int count;
+  int i;
+  int i2,j2;
+  float dist1,dist2,LocGreyLevel;
+  int IdSeg,IdEl;
+  int NbItToAverage;
+  int NbGreyLevDirec;
+
+  //1) INIT
+  //we suppose an orthogonal and isotropic grid
+  VoxStep=fabs(ImageIn->Image2World[0][0]);
+  
+  NbGreyLevDirec=static_cast<int>(4/VoxStep);   // nb of steps to obtain 4mm
+  
+  srand(time(NULL));
+  
+  NbItToAverage=10;
+  
+  thresh1=(AverageBG+3*AverageSF)/4;
+  thresh2=(AverageSF+3*AverageFG)/4;
+  
+  for (IdSeg=0;IdSeg<PointsIn->GetSegNumber();IdSeg++) if (PointsIn->GetElNumber(IdSeg)>1){
+    for (IdEl=0;IdEl<PointsIn->GetElNumber(IdSeg);IdEl++){
+      
+      //define the initial central point
+      xloc=PointsIn->GetX(IdSeg,IdEl);
+      yloc=PointsIn->GetY(IdSeg,IdEl);
+      zloc=PointsIn->GetZ(IdSeg,IdEl);
+      
+      
+      if (IdSeg==0){
+        nvecloc[0]=PointsIn->GetX(IdSeg,IdEl+1)-PointsIn->GetX(IdSeg,IdEl);
+        nvecloc[1]=PointsIn->GetY(IdSeg,IdEl+1)-PointsIn->GetY(IdSeg,IdEl);
+        nvecloc[2]=PointsIn->GetZ(IdSeg,IdEl+1)-PointsIn->GetZ(IdSeg,IdEl);
+      }
+      else if (IdSeg==PointsIn->GetElNumber(IdSeg)-1){
+        nvecloc[0]=PointsIn->GetX(IdSeg,IdEl)-PointsIn->GetX(IdSeg,IdEl-1);
+        nvecloc[1]=PointsIn->GetY(IdSeg,IdEl)-PointsIn->GetY(IdSeg,IdEl-1);
+        nvecloc[2]=PointsIn->GetZ(IdSeg,IdEl)-PointsIn->GetZ(IdSeg,IdEl-1);
+      }
+      else{
+        nvecloc[0]=PointsIn->GetX(IdSeg,IdEl+1)-PointsIn->GetX(IdSeg,IdEl-1);
+        nvecloc[1]=PointsIn->GetY(IdSeg,IdEl+1)-PointsIn->GetY(IdSeg,IdEl-1);
+        nvecloc[2]=PointsIn->GetZ(IdSeg,IdEl+1)-PointsIn->GetZ(IdSeg,IdEl-1);
+      }
+      
+      dist=sqrt(nvecloc[0]*nvecloc[0]+nvecloc[1]*nvecloc[1]+nvecloc[2]*nvecloc[2]);
+      if (dist>0.00000001){
+        
+        epsilon=dist/100;
+        
+	//define two orthogonal directions in the plan where transformations are allowed.
+	CptVecsTangentPlane(nvecloc,vec1,vec2);
+	VecNormalize(vec1,VoxStep);
+	VecNormalize(vec2,VoxStep);
+	
+         //2) ESTIMATE THE GRADIENT
+	 
+	GradientCoord->PutX(0,IdSeg,IdEl);
+        GradientCoord->PutY(0,IdSeg,IdEl);
+        GradientCoord->PutZ(0,IdSeg,IdEl);
+
+        for (iterations=0;iterations<NbItToAverage;iterations++){
+          
+	  //2.1) Define a temporary direction in vec3 and its tangent plane
+          //estimate the direction to check at the current iteration
+          rotLoc=static_cast<float>(rand())*3.14/RAND_MAX;
+	  //cout <<  rotLoc << " -> " << cos(rotLoc)  << " " << sin(rotLoc) << endl;
+          
+          vec3[0]=cos(rotLoc)*vec1[0]+sin(rotLoc)*vec2[0];   //note that vec3 has a norm equal to the image resolution
+          vec3[1]=cos(rotLoc)*vec1[1]+sin(rotLoc)*vec2[1];
+          vec3[2]=cos(rotLoc)*vec1[2]+sin(rotLoc)*vec2[2];
+	  
+	  //compute 2 vectors representing the tangent plane to vec3  (they have a norm equal to the image resolution)
+	  CptVecsTangentPlane(vec3,T1_vec3,T2_vec3);
+
+
+	  //2.2) observe the grey levels we have in direction vec3 and -vec3
+
+	  //2.2.1) grey levels in vec3 direction...
+	  float LocDist,FlaggedDist;
+          
+	  FlaggedDist=VoxStep*(NbGreyLevDirec+2);
+	  dist1=VoxStep*(NbGreyLevDirec+2);
+	  for (i=0;i<NbGreyLevDirec;i++) if (dist1>VoxStep*(NbGreyLevDirec+1)){
+	    //2.2.1.1) loc parameters
+	    xloc2=xloc+vec3[0]*(i+2);
+	    yloc2=yloc+vec3[1]*(i+2);
+	    zloc2=zloc+vec3[2]*(i+2);
+	    LocDist=VoxStep*(i+2);
+	    
+	    //2.2.1.2) loc grey level
+	    LocGreyLevel=0;
+	    for (i2=-2;i2<3;i2++) for (j2=-2;j2<3;j2++) 
+	      LocGreyLevel+=ImageIn->G(ImageIn->World2Image,xloc2+i2*T1_vec3[0]+j2*T2_vec3[0],yloc2+i2*T1_vec3[1]+j2*T2_vec3[1],zloc2+i2*T1_vec3[2]+j2*T2_vec3[2]);
+	    LocGreyLevel/=25;
+	    
+	    //2.2.1.3) check wether we're inside or outside the cochlea
+	    //... case 1: outside of the cochlea
+	    if (LocGreyLevel>thresh2) 
+	      dist1=LocDist;
+	    
+	    //... case 2: appartently in the cochlea but above thresh1 for the first time
+	    if ((FlaggedDist>(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel>thresh1)) 
+	      FlaggedDist=LocDist;
+	    
+	    //... case 3: appartently in the cochlea but above thresh1 since more than 0.5 mm
+	    if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocDist-FlaggedDist>0.5))
+	      dist1=LocDist;
+	    
+	    //... case 4: under thresh1 but already been above thresh1
+	    if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel<thresh1))
+	      dist1=FlaggedDist;
+          }
+          
+	  
+          //2.2.2) grey levels in -vec3 direction
+	  
+	  FlaggedDist=VoxStep*(NbGreyLevDirec+2);
+	  dist2=VoxStep*(NbGreyLevDirec+2);
+	  for (i=0;i<NbGreyLevDirec;i++) if (dist2>VoxStep*(NbGreyLevDirec+1)){
+	    //2.2.2.1) loc parameters
+	    xloc2=xloc-vec3[0]*(i+2);
+	    yloc2=yloc-vec3[1]*(i+2);
+	    zloc2=zloc-vec3[2]*(i+2);
+	    LocDist=VoxStep*(i+2);
+	    
+	    //2.2.2.2) loc grey level
+	    LocGreyLevel=0;
+	    for (i2=-2;i2<3;i2++) for (j2=-2;j2<3;j2++) 
+	      LocGreyLevel+=ImageIn->G(ImageIn->World2Image,xloc2+i2*T1_vec3[0]+j2*T2_vec3[0],yloc2+i2*T1_vec3[1]+j2*T2_vec3[1],zloc2+i2*T1_vec3[2]+j2*T2_vec3[2]);
+	    LocGreyLevel/=25;
+	    
+	    //2.2.2.3) check wether we're inside or outside the cochlea
+	    //... case 1: outside of the cochlea
+	    if (LocGreyLevel>thresh2) 
+	      dist2=LocDist;
+	    
+	    //... case 2: appartently in the cochlea but above thresh1 for the first time
+	    if ((FlaggedDist>(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel>thresh1)) 
+	      FlaggedDist=LocDist;
+	    
+	    //... case 3: appartently in the cochlea but above thresh1 since more than 0.5 mm
+	    if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocDist-FlaggedDist>0.5))
+	      dist2=LocDist;
+	    
+	    //... case 4: under thresh1 but already been above thresh1
+	    if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel<thresh1))
+	      dist2=FlaggedDist;
+          }
+          
+	  //2.3) update the skeleton center gradient
+          if (dist1>dist2){
+            GradientCoord->PutX(vec3[0]+GradientCoord->GetX(IdSeg,IdEl),IdSeg,IdEl);
+            GradientCoord->PutY(vec3[1]+GradientCoord->GetY(IdSeg,IdEl),IdSeg,IdEl);
+            GradientCoord->PutZ(vec3[2]+GradientCoord->GetZ(IdSeg,IdEl),IdSeg,IdEl);
+          }
+          if (dist1<dist2){
+            GradientCoord->PutX(-vec3[0]+GradientCoord->GetX(IdSeg,IdEl),IdSeg,IdEl);
+            GradientCoord->PutY(-vec3[1]+GradientCoord->GetY(IdSeg,IdEl),IdSeg,IdEl);
+            GradientCoord->PutZ(-vec3[2]+GradientCoord->GetZ(IdSeg,IdEl),IdSeg,IdEl);
+          }
+          
+          
+          //cout << dist1 << " vs " << dist2 << endl;
+          
+        }
+        
+        //2.4) rescale the skeleton center gradient
+        GradientCoord->PutX(GradientCoord->GetX(IdSeg,IdEl)/static_cast<float>(NbItToAverage),IdSeg,IdEl);
+        GradientCoord->PutY(GradientCoord->GetY(IdSeg,IdEl)/static_cast<float>(NbItToAverage),IdSeg,IdEl);
+        GradientCoord->PutZ(GradientCoord->GetZ(IdSeg,IdEl)/static_cast<float>(NbItToAverage),IdSeg,IdEl);
+      }
+    }
+  }
+}
+  
+
+
+
+///Reestimate the coordinates of a point in the centerline of the cochlea in image 'ImageIn'.
+///-> sizeROI is the size (in mm) of the ROI in which the centerline point is sought. It must be sufficently large to capture the 'tube' boundaries.
+///-> AverageBG,AverageSF, AverageFG are the average grey levels of the cochler background, the cochlear small grey features, and the tissues.
+///-> coordloc[0], coordloc[1], coordloc[2] is the coordinate of the starting points
+///-> nvecloc[0], nvecloc[1], nvecloc[2] is the vector normal to the plane in which the search for the centerline point is done
+///-> out_Info contains the outputs: out_Info[0], out_Info[1], out_Info[2] is the coordinate of the reestimated centerpoint / out_Info[3] is the estimated diameter / out_Info[4] equals 0 if the reestimated centerpoint seems unreliable
+void ReestimateCentralPoint(ScalarField * ImageIn, float sizeROI,float AverageBG,float AverageSF,float AverageFG,float coordloc[3],float nvecloc[3],float out_Info[5]){
+  float VoxStep;
+  float xloc2,yloc2,zloc2;
+  float xloc,yloc,zloc;
+  float vec1[3];
+  float vec2[3];
+  float vec3[3];
+  float T1_vec3[3];
+  float T2_vec3[3];
+  float epsilon,dist,tmpfl;
+  float thresh1,thresh2;
+  int iterations,GradEstimItera;
+  float rotLoc;
+  int count;
+  int i;
+  int i2,j2;
+  float dist1,dist2,LocGreyLevel;
+  int IdSeg,IdEl;
+  int NbItToAverage;
+  int NbGreyLevDirec;
+  float gradient[3];
+  float WorldToImage[4][4];
+  float TmpFl;
+  int NB_ITERATIONS;
+  float * Distances;
+  
+  
+  //1) INIT
+  
+  xloc=coordloc[0];
+  yloc=coordloc[1];
+  zloc=coordloc[2];
+  
+  //grid supposed isotropic
+  VoxStep=sqrt(ImageIn->Image2World[0][0]*ImageIn->Image2World[0][0]+ImageIn->Image2World[0][1]*ImageIn->Image2World[0][1]+ImageIn->Image2World[0][2]*ImageIn->Image2World[0][2]);
+  
+  NbGreyLevDirec=static_cast<int>(sizeROI/VoxStep);   // nb of steps to obtain [sizeROI]mm
+  
+  srand(time(NULL));
+  
+  NbItToAverage=50;
+  
+  thresh1=(AverageBG+3*AverageSF)/4;
+  thresh2=(AverageSF+3*AverageFG)/4;
+  
+  dist=sqrt(nvecloc[0]*nvecloc[0]+nvecloc[1]*nvecloc[1]+nvecloc[2]*nvecloc[2]);
+  
+  invert_4t4quaternion(ImageIn->Image2World,WorldToImage);
+  
+  if (dist>0.00000001){
+    
+    epsilon=dist/100;
+    
+    //define two orthogonal directions in the plan where transformations are allowed.
+    CptVecsTangentPlane(nvecloc,vec1,vec2);
+    VecNormalize(nvecloc,VoxStep);
+    VecNormalize(vec1,VoxStep);
+    VecNormalize(vec2,VoxStep);
+    
+    
+    //2) REESTIMATION OF THE CENTER POINT
+    
+    NB_ITERATIONS=100;
+    
+    Distances = new float [NB_ITERATIONS];
+    
+    for (iterations=0;iterations<NB_ITERATIONS;iterations++){
+    
+       //initiate the gradient
+       gradient[0]=0;
+       gradient[1]=0;
+       gradient[2]=0;
+
+      
+      for (GradEstimItera=0;GradEstimItera<NbItToAverage;GradEstimItera++){
+	
+	//2.1) Define a temporary direction in vec3 and its tangent plane
+	//estimate the direction to check at the current iteration
+	rotLoc=static_cast<float>(rand())*3.14/RAND_MAX;
+	//cout <<  rotLoc << " -> " << cos(rotLoc)  << " " << sin(rotLoc) << endl;
+	
+	vec3[0]=cos(rotLoc)*vec1[0]+sin(rotLoc)*vec2[0];   //note that vec3 has a norm equal to the image resolution
+	vec3[1]=cos(rotLoc)*vec1[1]+sin(rotLoc)*vec2[1];
+	vec3[2]=cos(rotLoc)*vec1[2]+sin(rotLoc)*vec2[2];
+	
+	//compute 2 vectors representing the tangent plane to vec3  (they have a norm equal to the image resolution)
+	CptVecsTangentPlane(vec3,T1_vec3,T2_vec3);
+
+
+	//2.2) observe the grey levels we have in direction vec3 and -vec3
+
+	//2.2.1) grey levels in vec3 direction...
+	float LocDist,FlaggedDist;
+	
+	FlaggedDist=VoxStep*(NbGreyLevDirec+2);
+	dist1=VoxStep*(NbGreyLevDirec+2);
+	for (i=0;i<NbGreyLevDirec;i++) if (dist1>VoxStep*(NbGreyLevDirec+1)){
+	  //2.2.1.1) loc parameters
+	  xloc2=xloc+vec3[0]*(i+2);
+	  yloc2=yloc+vec3[1]*(i+2);
+	  zloc2=zloc+vec3[2]*(i+2);
+	  LocDist=VoxStep*(i+2);
+	  
+	  //2.2.1.2) loc grey level
+	  LocGreyLevel=0;
+	  for (i2=-3;i2<4;i2++) for (j2=-3;j2<4;j2++) 
+	    LocGreyLevel+=ImageIn->G(ImageIn->World2Image,xloc2+i2*T1_vec3[0]+j2*T2_vec3[0],yloc2+i2*T1_vec3[1]+j2*T2_vec3[1],zloc2+i2*T1_vec3[2]+j2*T2_vec3[2]);
+	  LocGreyLevel/=49;
+	  
+    
+	  //2.2.1.3) check wether we're inside or outside the cochlea
+	  //... case 1: outside of the cochlea
+	  if (LocGreyLevel>thresh2) 
+	    dist1=LocDist;
+	  
+	  //... case 2: appartently in the cochlea but above thresh1 for the first time
+	  if ((FlaggedDist>(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel>thresh1)) 
+	    FlaggedDist=LocDist;
+	  
+	  //... case 3: appartently in the cochlea but above thresh1 since more than 0.5 mm
+	  if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocDist-FlaggedDist>0.5))
+	    dist1=LocDist;
+	  
+	  //... case 4: under thresh1 but already been above thresh1
+	  if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel<thresh1))
+	    dist1=FlaggedDist;
+	}
+	
+	
+	//2.2.2) grey levels in -vec3 direction
+	
+	FlaggedDist=VoxStep*(NbGreyLevDirec+2);
+	dist2=VoxStep*(NbGreyLevDirec+2);
+	for (i=0;i<NbGreyLevDirec;i++) if (dist2>VoxStep*(NbGreyLevDirec+1)){
+	  //2.2.2.1) loc parameters
+	  xloc2=xloc-vec3[0]*(i+2);
+	  yloc2=yloc-vec3[1]*(i+2);
+	  zloc2=zloc-vec3[2]*(i+2);
+	  LocDist=VoxStep*(i+2);
+	  
+	  //2.2.2.2) loc grey level
+	  LocGreyLevel=0;
+	  for (i2=-3;i2<4;i2++) for (j2=-3;j2<4;j2++) 
+	    LocGreyLevel+=ImageIn->G(ImageIn->World2Image,xloc2+i2*T1_vec3[0]+j2*T2_vec3[0],yloc2+i2*T1_vec3[1]+j2*T2_vec3[1],zloc2+i2*T1_vec3[2]+j2*T2_vec3[2]);
+	  LocGreyLevel/=49;
+	  
+	  //2.2.2.3) check wether we're inside or outside the cochlea
+	  //... case 1: outside of the cochlea
+	  if (LocGreyLevel>thresh2) 
+	    dist2=LocDist;
+	  
+	  //... case 2: appartently in the cochlea but above thresh1 for the first time
+	  if ((FlaggedDist>(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel>thresh1)) 
+	    FlaggedDist=LocDist;
+	  
+	  //... case 3: appartently in the cochlea but above thresh1 since more than 0.5 mm
+	  if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocDist-FlaggedDist>0.5))
+	    dist2=LocDist;
+	  
+	  //... case 4: under thresh1 but already been above thresh1
+	  if ((FlaggedDist<(VoxStep*(NbGreyLevDirec+1)))&&(LocGreyLevel<thresh1))
+	    dist2=FlaggedDist;
+	}
+	
+	//2.3) update the skeleton center gradient   (CHANGED!!!)
+        gradient[0]+=vec3[0]*(dist1-dist2)/(VoxStep*NbItToAverage);
+	gradient[1]+=vec3[1]*(dist1-dist2)/(VoxStep*NbItToAverage);
+	gradient[2]+=vec3[2]*(dist1-dist2)/(VoxStep*NbItToAverage);
+	
+	Distances[iterations]=fabs(dist1)+fabs(dist2);
+	
+	
+	//cout << dist1 << " vs " << dist2 << endl;
+	
+      }
+      
+      //2.4) rescale the skeleton center gradient
+      gradient[0]/=static_cast<float>(NbItToAverage);
+      gradient[1]/=static_cast<float>(NbItToAverage);
+      gradient[2]/=static_cast<float>(NbItToAverage);
+      
+      //2.5) update the centerpoint
+      xloc+=gradient[0];
+      yloc+=gradient[1];
+      zloc+=gradient[2];
+      
+      //cout << "Iteration " << iterations << ": " << xloc << " " << yloc << " " << zloc << "     <--added--     " << gradient[0] << " " <<  gradient[1] << " " <<  gradient[2] << endl;
+      
+    }
+  }
+  
+  //outputs the new centerpoint
+  out_Info[0]=xloc;
+  out_Info[1]=yloc;
+  out_Info[2]=zloc;
+  
+  //outputs the average raduis  (during the 10% last iterations)
+  TmpFl=0;
+  
+  for (iterations=static_cast<int>(NB_ITERATIONS*0.9);iterations<NB_ITERATIONS;iterations++)
+    TmpFl+=Distances[iterations];
+    
+  TmpFl/=static_cast<float>((NB_ITERATIONS-static_cast<int>(NB_ITERATIONS*0.9)));
+  
+  out_Info[3]=TmpFl;
+  
+  
+  //outputs if the estimation seems reliable
+  
+  TmpFl=0;
+  for (iterations=static_cast<int>(NB_ITERATIONS*0.9);iterations<NB_ITERATIONS;iterations++)
+    if (Distances[iterations]>out_Info[3]*1.5) TmpFl++;
+  
+  //cout << "Suspicious points: " << TmpFl << " / " << NB_ITERATIONS-static_cast<int>(NB_ITERATIONS*0.9) << endl;
+  
+  if (TmpFl>0.1*(NB_ITERATIONS-static_cast<int>(NB_ITERATIONS*0.9))) //more than 10% of tests with suspiciously large radii
+    out_Info[4]=0;
+  else 
+    out_Info[4]=1;
+  
+  if (fabs(out_Info[4]-1)<0.01){//point reliable on the first test
+    if (out_Info[3]<10*VoxStep) out_Info[4]=0;
+  
+  }
+}
+
+///ReestimateCentralPoint2(&ImageIn,Radius,&RefImageSeries,coordloc,nvecloc,out_Info);
+///Reestimate the coordinates of a point in the centerline of the cochlea in image 'ImageIn'.
+///-> coordloc[0], coordloc[1], coordloc[2] is the coordinate of the starting points
+///-> nvecloc[0], nvecloc[1], nvecloc[2] is the vector normal to the plane in which the search for the centerline point is done
+///-> ExpectedDiameter is the size (in mm) of the expected local choclear diameter.
+///-> topDownVec represents a central line around which the cochlea is wrapped -> (topDownVec[0],topDownVec[1],topDownVec[2]) is the direction (X,Y,Z) of the line / (topDownVec[3],topDownVec[4],topDownVec[5]) is one point of the line 
+///-> RefImageSeries is set of 2D+t images, each time representing a 2D plane of the choclea centered on the centerline
+///-> location of coordloc in the moving centerline (from 0 to 1) to know where to pick up reference slices in RefImageSeries
+///-> ImageTmp2D,ImageRef2D: two temporary images used in the code that must be already allocated (to avoid too much new-free)
+///-> out_Info contains the outputs: out_Info[0], out_Info[1], out_Info[2] is the coordinate of the reestimated centerpoint / out_Info[3] is the estimated diameter / out_Info[4] equals 0 if the reestimated centerpoint seems unreliable
+void ReestimateCentralPoint2(ScalarField * ImageIn,float coordloc[3],float nvecloc[3], float ExpectedDiameter,float topDownVec[6],ScalarField * RefImageSeries,float LocationInCurve,ScalarField * ImageTmp2D,ScalarField * ImageRef2D,float out_Info[5]){
+  float VoxStep_ImageIn,VoxStep_RefImageSeries;
+  float xloc2,yloc2,zloc2;
+  float xloc,yloc,zloc;
+  float vec1[3];
+  float vec2[3];
+  float vec3[3];
+  float Tvec1[3];
+  float Tvec2[3];
+  float LocDecWld[3];
+  float epsilon,dist,tmpfl;
+  int iterations;
+  float rotLoc;
+  int count;
+  int i,k,j;
+  int i2,j2,k2;
+  float dist1,dist2,LocGreyLevel;
+  int IdSeg,IdEl;
+  int ExpectedDiameterInPixels;
+  int DeltaSearch;
+  float gradient[3];
+  float WorldToImage[4][4];
+  float TmpFl,TmpFl2,TmpFl3;
+  int NB_ITERATIONS;
+  int i3,j3;
+  float * Distances;
+  int EstimatedOptimalFrameInRefImageSeries;
+  float theta,theta_optimal;
+  int DecX_optimal,DecY_optimal;
+  float SSD,SSD_optimal;
+  float zoom,zoom_optimal;
+  float iDec,jDec;
+  int NbPtsListsDec,ElemListsDec;
+  float DecY,DecX;
+  float * ListDecX;
+  float * ListDecY;
+  int ROI_xmin,ROI_xmax,ROI_ymin,ROI_ymax;
+  float DecXmm,DecYmm,DecZmm;
+  float DecXpix,DecYpix;
+  char prefix[256];
+  char CharLocationInCurve[10];
+  char suffix[256];
+  int EligibleDef;
+  float LinePt[3];
+  float LineVec[3];
+  float ProjCoordloc[3];
+  float locmat[4][4];
+
+  //1) INIT
+  
+  xloc=coordloc[0];
+  yloc=coordloc[1];
+  zloc=coordloc[2];
+  
+  
+  //1.1) image to world stuffs (grids supposed isotropic)
+  VoxStep_ImageIn=sqrt(ImageIn->Image2World[0][0]*ImageIn->Image2World[0][0]+ImageIn->Image2World[0][1]*ImageIn->Image2World[0][1]+ImageIn->Image2World[0][2]*ImageIn->Image2World[0][2]);
+  VoxStep_RefImageSeries=RefImageSeries->Image2World[0][0];
+  
+  cout << "Voxel steps:  ImageIn->" << VoxStep_ImageIn << " / RefImageSeries-> " << VoxStep_RefImageSeries << endl;
+  cout << endl;
+  
+  invert_4t4quaternion(ImageIn->Image2World,WorldToImage);
+  
+  //1.2) default output values
+  out_Info[0]=coordloc[0];
+  out_Info[1]=coordloc[1];
+  out_Info[2]=coordloc[2];
+  out_Info[4]=1;
+
+  //1.3) define the translations to test  (in the RefImageSeries image domain)
+  ExpectedDiameterInPixels=static_cast<int>(ExpectedDiameter/VoxStep_RefImageSeries);
+  DeltaSearch=static_cast<int>(ExpectedDiameterInPixels/20);
+  if (DeltaSearch<1) DeltaSearch=1;
+  
+  cout << "Expected diameter in pixels:" << ExpectedDiameterInPixels << " / Step size in pixels: " << DeltaSearch << endl;
+  cout << endl;
+  
+  NbPtsListsDec=0;
+  for (DecY=-ExpectedDiameterInPixels;DecY<=ExpectedDiameterInPixels;DecY+=DeltaSearch){  
+    for (DecX=-ExpectedDiameterInPixels;DecX<=ExpectedDiameterInPixels;DecX+=DeltaSearch){
+      TmpFl=sqrt((DecY*DecY)+(DecX*DecX));
+      if ((TmpFl>(0.20*ExpectedDiameterInPixels))&&(TmpFl<(ExpectedDiameterInPixels))){
+        NbPtsListsDec++;
+        }
+      }
+    }
+  
+  ListDecX = new float [NbPtsListsDec];
+  ListDecY = new float [NbPtsListsDec];
+  
+  //cout << "Translations to test: ";
+  
+  ElemListsDec=0;
+  for (DecY=-ExpectedDiameterInPixels;DecY<=ExpectedDiameterInPixels;DecY+=DeltaSearch){  
+    for (DecX=-ExpectedDiameterInPixels;DecX<=ExpectedDiameterInPixels;DecX+=DeltaSearch){
+      TmpFl=sqrt((DecY*DecY)+(DecX*DecX));
+      if ((TmpFl>(0.20*ExpectedDiameterInPixels))&&(TmpFl<(ExpectedDiameterInPixels))){
+        ListDecX[ElemListsDec]=DecX;
+        ListDecY[ElemListsDec]=DecY;
+        ElemListsDec++;
+        //cout << DecX << " " << DecY << " / ";
+        }
+      }
+    }
+  
+  //cout << endl;
+  //cout << endl;
+  
+  //1.4) ROI in which we'll measure the SSD (in the RefImageSeries image domain)
+  ROI_xmin=static_cast<int>((static_cast<float>(RefImageSeries->NX)/2)-(0.70*ExpectedDiameter/VoxStep_RefImageSeries));
+  ROI_xmax=static_cast<int>((static_cast<float>(RefImageSeries->NX)/2)+(0.70*ExpectedDiameter/VoxStep_RefImageSeries));
+  ROI_ymin=static_cast<int>((static_cast<float>(RefImageSeries->NY)/2)-(0.70*ExpectedDiameter/VoxStep_RefImageSeries));
+  ROI_ymax=static_cast<int>((static_cast<float>(RefImageSeries->NY)/2)+(0.70*ExpectedDiameter/VoxStep_RefImageSeries));
+      
+  if (ROI_xmin<0) ROI_xmin=0;
+  if (ROI_xmax>RefImageSeries->NX) ROI_xmax=RefImageSeries->NX;
+  if (ROI_ymin<0) ROI_ymin=0;
+  if (ROI_ymax>RefImageSeries->NY) ROI_ymax=RefImageSeries->NY;
+
+  cout << "ROI_xmin="  << ROI_xmin << " / ROI_xmax=" << ROI_xmax <<  " / ROI_ymin="  << ROI_ymin << " / ROI_ymax=" << ROI_ymax << endl;
+  cout << endl;
+  
+  //2) REESTIMATION OF THE CENTER POINT
+  if (sqrt(nvecloc[0]*nvecloc[0]+nvecloc[1]*nvecloc[1]+nvecloc[2]*nvecloc[2])>0.00000001){
+    
+    //2.1) init
+    epsilon=sqrt(nvecloc[0]*nvecloc[0]+nvecloc[1]*nvecloc[1]+nvecloc[2]*nvecloc[2])/100;
+    
+    //2.1.1) define two orthogonal directions in the plane where transformations are allowed.
+    CptVecsTangentPlane(nvecloc,vec1,vec2);
+    VecNormalize(nvecloc,VoxStep_ImageIn);
+    VecNormalize(vec1,VoxStep_ImageIn);
+    VecNormalize(vec2,VoxStep_ImageIn);
+    
+    //2.1.2) define the reference image in RefImageSeries
+    EstimatedOptimalFrameInRefImageSeries=static_cast<int>(LocationInCurve*RefImageSeries->NT);
+    
+    for (k=0;k<5;k++){
+      k2=EstimatedOptimalFrameInRefImageSeries-2+k;
+      if (k2<0) k2=0;
+      if (k2>=RefImageSeries->NT) k2=RefImageSeries->NT-1;
+      
+      for (j=0;j<RefImageSeries->NY;j++) for (i=0;i<RefImageSeries->NX;i++)
+        ImageRef2D->P(RefImageSeries->G(i,j,0,k2),i,j,0,k);
+      }
+      
+    //ImageRef2D->Write("ImageRef2D.nii");
+
+    
+    //2.1.3) Sample different possible corresponding images in ImageIn and find the optimal transformation
+    SSD_optimal=-1;
+    
+    for (theta=0;theta<6.2832;theta+=0.2) for (zoom=0.8;zoom<1.3;zoom+=0.2) {  //step = about 10.4 degrees
+      cout << "Test theta=" << theta*180/3.1416 <<  "  --  Test zoom=" << zoom << endl;
+
+      
+      //2.1.3.1) reorient the local basis
+      Tvec1[0]=vec1[0]*cos(theta)+vec2[0]*sin(theta);
+      Tvec1[1]=vec1[1]*cos(theta)+vec2[1]*sin(theta);
+      Tvec1[2]=vec1[2]*cos(theta)+vec2[2]*sin(theta);
+      Tvec2[0]=-vec1[0]*sin(theta)+vec2[0]*cos(theta);
+      Tvec2[1]=-vec1[1]*sin(theta)+vec2[1]*cos(theta);
+      Tvec2[2]=-vec1[2]*sin(theta)+vec2[2]*cos(theta);
+      
+      VecNormalize(Tvec1,zoom*VoxStep_RefImageSeries);
+      VecNormalize(Tvec2,zoom*VoxStep_RefImageSeries);
+      
+      //2.1.3.2) sample the test image in ImageIn with current transformation parameters
+      for (j2=0;j2<=RefImageSeries->NY;j2++)
+        for (i2=0;i2<=RefImageSeries->NX;i2++){
+          TmpFl=0;
+          i3=i2-RefImageSeries->NX/2;
+          j3=j2-RefImageSeries->NY/2;
+          for (k2=-3;k2<=3;k2++){
+            xloc=coordloc[0]+(Tvec1[0]*i3)+(Tvec2[0]*j3)+(nvecloc[0]*k2);
+            yloc=coordloc[1]+(Tvec1[1]*i3)+(Tvec2[1]*j3)+(nvecloc[1]*k2);
+            zloc=coordloc[2]+(Tvec1[2]*i3)+(Tvec2[2]*j3)+(nvecloc[2]*k2);
+            TmpFl+=ImageIn->G(ImageIn->World2Image,xloc,yloc,zloc);
+          }
+          TmpFl/=7;
+          ImageTmp2D->P(TmpFl,i2,j2);
+        }
+          
+      //2.1.3.3) linear alignment of the grey levels on the reference images
+      ImageTmp2D->GreyLevAlignment(ImageRef2D);
+
+      //2.1.3.4) compare with the reference images
+      for (ElemListsDec=0;ElemListsDec<NbPtsListsDec;ElemListsDec++){
+           
+           //2.1.3.4.a) define the local displacement in world coord
+           LocDecWld[0]=(Tvec1[0]*ListDecX[ElemListsDec]/zoom)+(Tvec2[0]*ListDecY[ElemListsDec]/zoom);
+           LocDecWld[1]=(Tvec1[1]*ListDecX[ElemListsDec]/zoom)+(Tvec2[1]*ListDecY[ElemListsDec]/zoom);
+           LocDecWld[2]=(Tvec1[2]*ListDecX[ElemListsDec]/zoom)+(Tvec2[2]*ListDecY[ElemListsDec]/zoom);
+           
+           
+          //2.1.3.4.b) check whether the temporary deformation is eligible
+          //... compute the distance to the origin
+          TmpFl=sqrt((LocDecWld[0]*LocDecWld[0])+(LocDecWld[1]*LocDecWld[1])+(LocDecWld[2]*LocDecWld[2]));
+          
+          //... compute the angle it has with the plane orthogonal to the top-down vector
+          TmpFl2=(LocDecWld[0]*topDownVec[0]+LocDecWld[1]*topDownVec[1]+LocDecWld[2]*topDownVec[2])/TmpFl;      //topDownVec is supposed normalized
+          if (TmpFl2>1) TmpFl2=1;   if (TmpFl2<-1) TmpFl2=-1;   //should not append but in case
+          TmpFl2=asin(TmpFl2)*180/3.14158;
+          
+          //... check whether it goes towards the inner direction of the cochlea
+          LineVec[0]=topDownVec[0]; LineVec[1]=topDownVec[1]; LineVec[2]=topDownVec[2]; 
+          LinePt[0]=topDownVec[3]; LinePt[1]=topDownVec[4]; LinePt[2]=topDownVec[5]; 
+          
+          Project_point_to_a_line(coordloc,LinePt,LineVec,ProjCoordloc);
+          
+          TmpFl3=((ProjCoordloc[0]-coordloc[0])*LocDecWld[0])+((ProjCoordloc[1]-coordloc[1])*LocDecWld[1])+((ProjCoordloc[2]-coordloc[2])*LocDecWld[2]);
+          
+          
+          //...check whether the temporary deformation is eligible
+          EligibleDef=1;
+          if (TmpFl<(5*ExpectedDiameter/20)) EligibleDef=0;
+          if (TmpFl>(12*ExpectedDiameter/20)) EligibleDef=0;
+          if (TmpFl2<(-20)) EligibleDef=0;
+          if (TmpFl2>(20)) EligibleDef=0;
+          if (TmpFl3<0) EligibleDef=0;
+
+          //2.1.3.4.c) if yes comparision between the temporary image and the reference images
+          if (EligibleDef==1) for (k=0;k<5;k++){
+            SSD=0;
+            for (j=ROI_ymin;j<ROI_ymax;j++) for (i=ROI_xmin;i<ROI_xmax;i++){
+                iDec=static_cast<float>(i+ListDecX[ElemListsDec]/zoom); 
+                jDec=static_cast<float>(j+ListDecY[ElemListsDec]/zoom); 
+                SSD+=(ImageRef2D->G(i,j,0,k)-ImageTmp2D->G(iDec,jDec))*(ImageRef2D->G(i,j,0,k)-ImageTmp2D->G(iDec,jDec));
+            }
+            
+            if (SSD_optimal<0){
+              SSD_optimal=SSD; DecX_optimal=ListDecX[ElemListsDec]; DecY_optimal=ListDecY[ElemListsDec]; theta_optimal=theta; zoom_optimal=zoom;
+              
+              TmpFl=sqrt(SSD_optimal/(RefImageSeries->NY*RefImageSeries->NX));
+              DecXmm=(Tvec1[0]*DecX_optimal/zoom)+(Tvec2[0]*DecY_optimal/zoom_optimal);
+              DecYmm=(Tvec1[1]*DecX_optimal/zoom)+(Tvec2[1]*DecY_optimal/zoom_optimal);
+              DecZmm=(Tvec1[2]*DecX_optimal/zoom)+(Tvec2[2]*DecY_optimal/zoom_optimal);
+              DecXpix=DecX_optimal*cos(theta)+DecY_optimal*sin(theta);
+              DecYpix=-DecX_optimal*sin(theta)+DecY_optimal*cos(theta);
+  
+              cout << "Initial SSD: " << TmpFl << "     | DecXpix=" << DecXpix << " DecYpix=" << DecYpix  <<  " | DecXmm=" << DecXmm << "  DecYmm=" << DecYmm  << "  DecZmm=" << DecZmm  << " | k=" << k << endl;
+              
+              //strcpy(prefix,"Slice_");
+              //sprintf (CharLocationInCurve, "%04d", static_cast<int>(LocationInCurve*1000));
+              //strcpy(suffix,"_Ini.nii");
+              //strcat(prefix,CharLocationInCurve);
+              //strcat(prefix,suffix);
+              //ImageTmp2D->Write(prefix);
+              }
+              
+            if (SSD<SSD_optimal){
+              SSD_optimal=SSD; DecX_optimal=ListDecX[ElemListsDec]; DecY_optimal=ListDecY[ElemListsDec]; theta_optimal=theta; zoom_optimal=zoom;
+              
+              TmpFl=sqrt(SSD_optimal/(RefImageSeries->NY*RefImageSeries->NX));
+              DecXmm=(Tvec1[0]*DecX_optimal/zoom)+(Tvec2[0]*DecY_optimal/zoom_optimal);
+              DecYmm=(Tvec1[1]*DecX_optimal/zoom)+(Tvec2[1]*DecY_optimal/zoom_optimal);
+              DecZmm=(Tvec1[2]*DecX_optimal/zoom)+(Tvec2[2]*DecY_optimal/zoom_optimal);
+              DecXpix=DecX_optimal*cos(theta)+DecY_optimal*sin(theta);
+              DecYpix=-DecX_optimal*sin(theta)+DecY_optimal*cos(theta);
+              
+              cout << "New optimal SSD: " << TmpFl << " | DecXpix=" << DecXpix << " DecYpix=" << DecYpix  <<  " | DecXmm=" << DecXmm << "  DecYmm=" << DecYmm  << "  DecZmm=" << DecZmm  << " | k=" << k << endl;
+              }
+          }
+      }
+    }
+  
+    //3) OUTPUTS THE NEW CENTERPOINT
+    Tvec1[0]=vec1[0]*cos(theta_optimal)+vec2[0]*sin(theta_optimal);
+    Tvec1[1]=vec1[1]*cos(theta_optimal)+vec2[1]*sin(theta_optimal);
+    Tvec1[2]=vec1[2]*cos(theta_optimal)+vec2[2]*sin(theta_optimal);
+    Tvec2[0]=-vec1[0]*sin(theta_optimal)+vec2[0]*cos(theta_optimal);
+    Tvec2[1]=-vec1[1]*sin(theta_optimal)+vec2[1]*cos(theta_optimal);
+    Tvec2[2]=-vec1[2]*sin(theta_optimal)+vec2[2]*cos(theta_optimal);
+      
+    VecNormalize(Tvec1,zoom_optimal*VoxStep_RefImageSeries);
+    VecNormalize(Tvec2,zoom_optimal*VoxStep_RefImageSeries);
+    
+    out_Info[0]=coordloc[0]+(Tvec1[0]*DecX_optimal/zoom_optimal)+(Tvec2[0]*DecY_optimal/zoom_optimal);
+    out_Info[1]=coordloc[1]+(Tvec1[1]*DecX_optimal/zoom_optimal)+(Tvec2[1]*DecY_optimal/zoom_optimal);
+    out_Info[2]=coordloc[2]+(Tvec1[2]*DecX_optimal/zoom_optimal)+(Tvec2[2]*DecY_optimal/zoom_optimal);
+    out_Info[4]=1;   // updated in part 4 of the function
+    
+    
+    //for (j2=0;j2<=RefImageSeries->NY;j2++)
+    //  for (i2=0;i2<=RefImageSeries->NX;i2++){
+    //    TmpFl=0;
+    //    i3=i2-RefImageSeries->NX/2;
+    //    j3=j2-RefImageSeries->NY/2;
+    //    for (k2=-3;k2<=3;k2++){
+    //      xloc=out_Info[0]+(Tvec1[0]*i3)+(Tvec2[0]*j3)+(nvecloc[0]*k2);
+    //      yloc=out_Info[1]+(Tvec1[1]*i3)+(Tvec2[1]*j3)+(nvecloc[1]*k2);
+    //      zloc=out_Info[2]+(Tvec1[2]*i3)+(Tvec2[2]*j3)+(nvecloc[2]*k2);
+    //      TmpFl+=ImageIn->G(ImageIn->World2Image,xloc,yloc,zloc);
+    //    }
+    //    TmpFl/=7;
+    //    ImageTmp2D->P(TmpFl,i2,j2);
+    //}
+    //
+    //strcpy(prefix,"Slice_");
+    //sprintf (CharLocationInCurve, "%04d", static_cast<int>(LocationInCurve*1000));
+    //strcpy(suffix,"_Ref.nii");
+    //strcat(prefix,CharLocationInCurve);
+    //strcat(prefix,suffix);
+    //ImageRef2D->Write(prefix);
+  }  //end if -- something to do --
+  else
+    cout << "The normal to the curve was equal to zero at a point -> no re-estimation of the centerpoint" << endl;
+  
+  delete ListDecX;
+  delete ListDecY;
+  
+  
+  //4) Mesure and return the 'likelihood' of the estimation
+  
+  //4.1) compute the norm of the update and the angle it has with the plane orthogonal to the top-down vector
+  TmpFl=((Tvec1[0]*DecX_optimal/zoom_optimal)+(Tvec2[0]*DecY_optimal/zoom_optimal))*((Tvec1[0]*DecX_optimal/zoom_optimal)+(Tvec2[0]*DecY_optimal/zoom_optimal));
+  TmpFl+=((Tvec1[1]*DecX_optimal/zoom_optimal)+(Tvec2[1]*DecY_optimal/zoom_optimal))*((Tvec1[1]*DecX_optimal/zoom_optimal)+(Tvec2[1]*DecY_optimal/zoom_optimal));
+  TmpFl+=((Tvec1[2]*DecX_optimal/zoom_optimal)+(Tvec2[2]*DecY_optimal/zoom_optimal))*((Tvec1[2]*DecX_optimal/zoom_optimal)+(Tvec2[2]*DecY_optimal/zoom_optimal));
+  TmpFl=sqrt(TmpFl);
+  
+  TmpFl2=((Tvec1[0]*DecX_optimal/zoom_optimal)+(Tvec2[0]*DecY_optimal/zoom_optimal))*topDownVec[0];
+  TmpFl2+=((Tvec1[1]*DecX_optimal/zoom_optimal)+(Tvec2[1]*DecY_optimal/zoom_optimal))*topDownVec[1];
+  TmpFl2+=((Tvec1[2]*DecX_optimal/zoom_optimal)+(Tvec2[2]*DecY_optimal/zoom_optimal))*topDownVec[2];   //topDownVec is supposed normalized
+  TmpFl2/=TmpFl;
+  if (TmpFl2>1) TmpFl2=1;   if (TmpFl2<-1) TmpFl2=-1;   //should not append but in case
+  TmpFl2=asin(TmpFl2)*180/3.14158;
+  
+
+  //4.2) compute and return the 'likelihood' of the estimation
+
+  TmpFl3=ExpectedDiameter/2;
+  
+  out_Info[4]=exp(-(TmpFl2*TmpFl2)/(2*15*15))/exp(0);
+  out_Info[4]*=exp(-((TmpFl-TmpFl3)*(TmpFl-TmpFl3))/(2*(TmpFl3/3)*(TmpFl3/3)))/exp(0);
+
+  cout << "distance="  << TmpFl << "    angle=" << TmpFl2 <<  "    likelihood=" << out_Info[4] << endl;
+  
+}
+
+
+
+
+
+//resample the 1st non-null segment of InputCurveFile with NewElNb
+void CurveResampler(int argc, char **argv){
+  char InputCurveFile[256];
+  char OutputCurveFile[256];
+  LDMK_Curves Network;
+  int NewElNb;
+  int FirstSegment;
+  
+  //read parameters
+  argc--; argv++;
+  strcpy(InputCurveFile,argv[1]);
+  argc--; argv++;
+  NewElNb= atoi(argv[1]);
+  argc--; argv++;
+  strcpy(OutputCurveFile,argv[1]);
+  argc--; argv++;
+  
+  //do the job
+  Network.Read(InputCurveFile);
+  
+  FirstSegment=0;  while (Network.GetElNumber(FirstSegment)<2) FirstSegment++;
+  
+  Network.ResampleSegment(FirstSegment,NewElNb);
+  
+  Network.Write(OutputCurveFile);
+
+}
+
+//estimate the radii on a curve
+void FollowCurve(int argc, char **argv){
+  char In3DImFile[256];
+  char Out2DpTImFile[256];
+  char CurveFile[256];
+  float Radius;
+  LDMK_Curves CurveIn;
+  ScalarField ImageIn;
+  ScalarField ImageOut;
+  float coordloc[3];
+  float tmpvec[4];
+  float tmpvecIma[4];
+  float nvecloc[3];
+  float Tvec1[3];
+  float Tvec2[3];
+  float tmpTvec[3];
+  float previousTvec2[3];
+  float ImageToWorld[4][4];
+  float WorldToImage[4][4];
+  float epsilon;
+  int HalfSizeOutputImage;
+  int i,j,k,i2,j2;
+  float x1,x2,x3,x4;
+  float y1,y2,y3,y4;
+  float z1,z2,z3,z4;
+  float xloc,yloc,zloc;
+  float VoxStep;
+  float xMin,xMax,yMin,yMax,zMin,zMax;
+  float tmpFl;
+  int mv3dInVoxels;
+  int ZreplacesT;
+  float ** MatIni;
+  float ** VecP;
+  float * ValP;
+  float * topDownVec;
+  float locmat[4][4];
+  char matNumber[10];
+  char MatName[256];
+  char Suffix[256];
+
+  //1) INIT
+  
+  //1.1) read parameters
+  argc--; argv++;
+  strcpy(In3DImFile,argv[1]);
+  argc--; argv++;
+  strcpy(CurveFile,argv[1]);
+  argc--; argv++;
+  Radius= atof(argv[1]);
+  argc--; argv++;
+  strcpy(Out2DpTImFile,argv[1]);
+  argc--; argv++;
+  
+  ZreplacesT=0;
+  if (argc>1){
+    ZreplacesT= atoi(argv[1]);
+    argc--; argv++;
+  }
+  
+  mv3dInVoxels=0;
+  if (argc>1){
+    mv3dInVoxels= atoi(argv[1]);
+    argc--; argv++;
+  }
+  
+  
+  //1.2) read image and curve
+  CurveIn.Read(CurveFile);
+  ImageIn.Read(In3DImFile); 
+  
+  //1.3) get the image to world matrix and compute the voxel step
+  Get_Image2World(In3DImFile,ImageToWorld);
+  
+  invert_4t4quaternion(ImageToWorld,WorldToImage);
+  
+  VoxStep=sqrt(ImageToWorld[0][0]*ImageToWorld[0][0]+ImageToWorld[0][1]*ImageToWorld[0][1]+ImageToWorld[0][2]*ImageToWorld[0][2]);
+  
+  HalfSizeOutputImage=static_cast<int>(Radius/VoxStep);
+  
+  epsilon=VoxStep/100;
+  
+  
+  //1.4) estimate the direction of the line around which the cochlea turns
+  k=0;  while (CurveIn.GetElNumber(k)<=1) k++;
+  
+  MatIni = new float * [3];
+  for(i=0;i<3;i++) MatIni[i]=new float [3];
+  VecP = new float * [3];
+  for(i=0;i<3;i++) VecP[i]=new float [3];
+  ValP = new float [3];
+  
+  topDownVec = new float [3];
+  
+  for (i2=0;i2<3;i2++) for (j2=0;j2<3;j2++) MatIni[i2][j2]=0;
+  
+  for (j=CurveIn.GetElNumber(k)/4;j<3*CurveIn.GetElNumber(k)/4;j++) if ((j>1)&&(j<CurveIn.GetElNumber(k)-1)){
+      Tvec1[0]=CurveIn.GetX(k,j+1)-CurveIn.GetX(k,j-1);
+      Tvec1[1]=CurveIn.GetY(k,j+1)-CurveIn.GetY(k,j-1);
+      Tvec1[2]=CurveIn.GetZ(k,j+1)-CurveIn.GetZ(k,j-1);
+      for (i2=0;i2<3;i2++) for (j2=0;j2<3;j2++) MatIni[i2][j2]+=Tvec1[i2]*Tvec1[j2];
+    }
+  
+  jacobi3(MatIni,ValP,VecP);
+  
+  topDownVec[0]=VecP[0][2];  topDownVec[1]=VecP[1][2];  topDownVec[2]=VecP[2][2];  
+  
+
+  //2) EXTRACT THE 2D IMAGES FROM THE 1ST CURVE OF CurveIn
+  
+  //2.1) search the curve of interest and allocate the memory for the output 2d+t image
+  i=0;
+  while (CurveIn.GetElNumber(i)<=1) i++;
+  
+  if (ZreplacesT==1)  ImageOut.CreateVoidField(2*HalfSizeOutputImage+1,2*HalfSizeOutputImage+1,CurveIn.GetElNumber(i),1);
+  else                ImageOut.CreateVoidField(2*HalfSizeOutputImage+1,2*HalfSizeOutputImage+1,1,CurveIn.GetElNumber(i));
+  
+  
+  ImageOut.Image2World[0][0]=VoxStep; ImageOut.Image2World[0][1]=0;       ImageOut.Image2World[0][2]=0;       ImageOut.Image2World[0][3]=0; 
+  ImageOut.Image2World[1][0]=0;       ImageOut.Image2World[1][1]=VoxStep; ImageOut.Image2World[1][2]=0;       ImageOut.Image2World[1][3]=0; 
+  ImageOut.Image2World[2][0]=0;       ImageOut.Image2World[2][1]=0;       ImageOut.Image2World[2][2]=VoxStep; ImageOut.Image2World[2][3]=0; 
+  ImageOut.Image2World[3][0]=0;       ImageOut.Image2World[3][1]=0;       ImageOut.Image2World[3][2]=0;       ImageOut.Image2World[3][3]=1; 
+  
+  invert_4t4quaternion(ImageOut.Image2World,ImageOut.World2Image);
+  
+  //option) convert the voxels coordinates into millimeter coordinates
+  if (mv3dInVoxels==1) for (j=0;j<CurveIn.GetElNumber(i);j++){
+      xloc=CurveIn.GetX(i,j)*ImageToWorld[0][0]+CurveIn.GetY(i,j)*ImageToWorld[0][1]+CurveIn.GetZ(i,j)*ImageToWorld[0][2]+ImageToWorld[0][3];
+      yloc=CurveIn.GetX(i,j)*ImageToWorld[1][0]+CurveIn.GetY(i,j)*ImageToWorld[1][1]+CurveIn.GetZ(i,j)*ImageToWorld[1][2]+ImageToWorld[1][3];
+      zloc=CurveIn.GetX(i,j)*ImageToWorld[2][0]+CurveIn.GetY(i,j)*ImageToWorld[2][1]+CurveIn.GetZ(i,j)*ImageToWorld[2][2]+ImageToWorld[2][3];
+      
+      CurveIn.PutX(xloc,i,j);
+      CurveIn.PutY(yloc,i,j);
+      CurveIn.PutZ(zloc,i,j);
+    }
+  
+  //2.2) extract the 2d images
+  for (j=0;j<CurveIn.GetElNumber(i);j++){
+    //2.2.1) extract the properties of the 2D image
+    
+    //2.2.1.1) local coordinate
+    coordloc[0]=CurveIn.GetX(i,j);
+    coordloc[1]=CurveIn.GetY(i,j);
+    coordloc[2]=CurveIn.GetZ(i,j);
+    
+    //2.2.1.2) local tangent to the centerline
+    if (j==0){
+      nvecloc[0]=CurveIn.GetX(i,j+1)-CurveIn.GetX(i,j);
+      nvecloc[1]=CurveIn.GetY(i,j+1)-CurveIn.GetY(i,j);
+      nvecloc[2]=CurveIn.GetZ(i,j+1)-CurveIn.GetZ(i,j);
+    }
+    else if (j==CurveIn.GetElNumber(i)-1){
+      nvecloc[0]=CurveIn.GetX(i,j)-CurveIn.GetX(i,j-1);
+      nvecloc[1]=CurveIn.GetY(i,j)-CurveIn.GetY(i,j-1);
+      nvecloc[2]=CurveIn.GetZ(i,j)-CurveIn.GetZ(i,j-1);
+      }
+    else{
+      nvecloc[0]=CurveIn.GetX(i,j+1)-CurveIn.GetX(i,j-1);
+      nvecloc[1]=CurveIn.GetY(i,j+1)-CurveIn.GetY(i,j-1);
+      nvecloc[2]=CurveIn.GetZ(i,j+1)-CurveIn.GetZ(i,j-1);
+    }
+    
+    
+    //2.2.1.3) 1st vectors tangent to the curve
+    if (j>0) previousTvec2[0]=Tvec2[0]; previousTvec2[1]=Tvec2[1]; previousTvec2[2]=Tvec2[2];
+    
+    VecNormalize(nvecloc,VoxStep);
+    CptVecsTangentPlane(nvecloc,Tvec1,Tvec2);
+    VecNormalize(Tvec1,VoxStep);
+    VecNormalize(Tvec2,VoxStep);
+
+    //2.2.1.4) 2nd vectors tangent to the curve  to stabilise the orientation of the extracted 2D images
+    tmpTvec[0]=topDownVec[0]; tmpTvec[1]=topDownVec[1]; tmpTvec[2]=topDownVec[2];
+    Project_3vec_plan(Tvec1,Tvec2,tmpTvec);
+    
+    Tvec1[0]=tmpTvec[0];
+    Tvec1[1]=tmpTvec[1];
+    Tvec1[2]=tmpTvec[2];
+      
+    VecNormalize(Tvec1,VoxStep);
+    crossProd_3vec(nvecloc,Tvec1,Tvec2);
+    VecNormalize(Tvec2,VoxStep);
+    
+    
+    if (j>0) if (scalarProd_3vec(Tvec2,previousTvec2)<0) {Tvec2[0]*=-1; Tvec2[1]*=-1; Tvec2[2]*=-1; }
+    
+    
+    //cout << Tvec1[0] << " "  << Tvec1[1] << " "  << Tvec1[2] << " // "  << Tvec2[0] << " "  << Tvec2[1] << " "  << Tvec2[2] << endl;
+    
+
+    //2.2.2) fill the 2D image
+    if (ZreplacesT==1){
+      for (i2=-HalfSizeOutputImage;i2<=HalfSizeOutputImage;i2++) for (j2=-HalfSizeOutputImage;j2<=HalfSizeOutputImage;j2++){
+        xloc=coordloc[0]+(Tvec1[0]*i2)+(Tvec2[0]*j2);
+        yloc=coordloc[1]+(Tvec1[1]*i2)+(Tvec2[1]*j2);
+        zloc=coordloc[2]+(Tvec1[2]*i2)+(Tvec2[2]*j2);
+        
+        ImageOut.P(ImageIn.G_NoExtrapo(ImageIn.World2Image,xloc,yloc,zloc),i2+HalfSizeOutputImage,j2+HalfSizeOutputImage,j);
+      }
+    }
+    else{
+      for (i2=-HalfSizeOutputImage;i2<=HalfSizeOutputImage;i2++) for (j2=-HalfSizeOutputImage;j2<=HalfSizeOutputImage;j2++){
+        xloc=coordloc[0]+(Tvec1[0]*i2)+(Tvec2[0]*j2);
+        yloc=coordloc[1]+(Tvec1[1]*i2)+(Tvec2[1]*j2);
+        zloc=coordloc[2]+(Tvec1[2]*i2)+(Tvec2[2]*j2);
+        
+        ImageOut.P(ImageIn.G_NoExtrapo(ImageIn.World2Image,xloc,yloc,zloc),i2+HalfSizeOutputImage,j2+HalfSizeOutputImage,0,j);
+      }
+    }
+    
+    //2.2.3) Save the image to world properties of slice j   -> does not seem to work accurately
+    //locmat[0][0]=Tvec1[0];  locmat[0][1]=Tvec2[0];  locmat[0][2]=nvecloc[0];  locmat[0][3]=coordloc[0]-(Tvec1[0]*HalfSizeOutputImage)-(Tvec2[0]*HalfSizeOutputImage);  
+    //locmat[1][0]=Tvec1[1];  locmat[1][1]=Tvec2[1];  locmat[1][2]=nvecloc[1];  locmat[1][3]=coordloc[1]-(Tvec1[1]*HalfSizeOutputImage)-(Tvec2[1]*HalfSizeOutputImage);
+    //locmat[2][0]=Tvec1[2];  locmat[2][1]=Tvec2[2];  locmat[2][2]=nvecloc[2];  locmat[2][3]=coordloc[2];  
+    //locmat[3][0]=0;  locmat[3][1]=0;  locmat[3][2]=0;  locmat[3][3]=1;  
+    //
+    //strcpy(MatName,"Slice_");
+    //sprintf(matNumber, "%04d", j);
+    //strcpy(Suffix,"_I2W.txt");
+    //strcat(MatName,matNumber);
+    //strcat(MatName,Suffix);
+    //
+    //Write_quat4t4mat(MatName,locmat);
+    
+  }
+  
+  ImageOut.Write(Out2DpTImFile);
+  
+}
+
+
+
+
+//reestimate the centerline from an orginal curve at its surface
+void EstimateCenterlineUsingCurveAtSurface(int argc, char **argv){
+  char In3DImFile[256];
+  char RefImageSeriesFile[256];
+  char Out2DpTImFile[256];
+  char CurveFile[256];
+  char OutCurveFile[256];
+  float ExpectedDiameter;
+  LDMK_Curves CurveIn;
+  LDMK_Curves CurveOut;
+  ScalarField ImageIn;
+  ScalarField RefImageSeries;
+  float coordloc[3];
+  float nvecloc[3];
+  float Tvec1[3];
+  float Tvec2[3];
+  float tmpVec1[3];
+  float tmpVec2[3];
+  float tmpVec3[3];
+  float ImageToWorld[4][4];
+  float WorldToImage[4][4];
+  float epsilon;
+  int HalfSizeOutputImage;
+  int i,j,k,i2,j2;
+  float xloc,yloc,zloc;
+  float VoxStep;
+  int AveragingMarginWidth;
+  float AveragedIntensity;
+  float out_Info[5];
+  float AverageBG,AverageSF,AverageFG;
+  float LocationInCurve;
+  ScalarField * ImageTmp2D;
+  ScalarField * ImageRef2D;
+  float ** MatIni;
+  float ** VecP;
+  float *  ValP;
+  float topDownVec[6];
+  float tmpFl,tmpFl2;
+  int ZreplacesT;
+
+
+  
+  //1) INIT
+  //1.1) read parameters
+  argc--; argv++;
+  strcpy(In3DImFile,argv[1]);
+  argc--; argv++;
+  strcpy(CurveFile,argv[1]);
+  argc--; argv++;
+  strcpy(RefImageSeriesFile,argv[1]);
+  argc--; argv++;
+  ExpectedDiameter= atof(argv[1]);
+  argc--; argv++;
+  strcpy(OutCurveFile,argv[1]);
+  argc--; argv++;
+  
+
+  //cout << CurveFile << " " <<  In3DImFile << " " <<  RefImageSeriesFile << " " <<  ExpectedDiameter << " " <<  Out2DpTImFile << " " <<   OutCurveFile << " " << endl;
+
+  //1.2) read images and curve
+  CurveIn.Read(CurveFile);
+  CurveOut.Read(CurveFile);
+  ImageIn.Read(In3DImFile);
+  RefImageSeries.Read(RefImageSeriesFile);
+  
+  //1.3) get the image to world matrix and compute the voxel step
+  Get_Image2World(In3DImFile,ImageToWorld);
+  
+  invert_4t4quaternion(ImageToWorld,WorldToImage);
+  
+  VoxStep=sqrt(ImageToWorld[0][0]*ImageToWorld[0][0]+ImageToWorld[0][1]*ImageToWorld[0][1]+ImageToWorld[0][2]*ImageToWorld[0][2]);
+  
+  HalfSizeOutputImage=static_cast<int>(ExpectedDiameter/(2*VoxStep));
+  
+  epsilon=VoxStep*VoxStep/100;
+  if (epsilon>VoxStep/100) epsilon=VoxStep/100;
+  
+  //1.4) allocate memory for the temporary 2D images
+  ImageTmp2D = new ScalarField [1];
+  ImageRef2D = new ScalarField [1];
+  ImageTmp2D->CreateVoidField(RefImageSeries.NX,RefImageSeries.NY);
+  ImageRef2D->CreateVoidField(RefImageSeries.NX,RefImageSeries.NY,1,5);  //5 images around the one supposed to be the optimal one will be used
+
+  //1.5) estimate the 'top-down' axis around which the cochlea is wrapped
+  //1.5.a) 'top-down' direction
+  k=0;  while (CurveIn.GetElNumber(k)<=1) k++;
+  
+  MatIni = new float * [3];
+  for(i=0;i<3;i++) MatIni[i]=new float [3];
+  VecP = new float * [3];
+  for(i=0;i<3;i++) VecP[i]=new float [3];
+  ValP = new float [3];
+  
+  for (i2=0;i2<3;i2++) for (j2=0;j2<3;j2++) MatIni[i2][j2]=0;
+  
+  for (j=CurveIn.GetElNumber(k)/4;j<3*CurveIn.GetElNumber(k)/4;j++) if ((j>1)&&(j<CurveIn.GetElNumber(k)-1)){
+      Tvec1[0]=CurveIn.GetX(k,j+1)-CurveIn.GetX(k,j-1);
+      Tvec1[1]=CurveIn.GetY(k,j+1)-CurveIn.GetY(k,j-1);
+      Tvec1[2]=CurveIn.GetZ(k,j+1)-CurveIn.GetZ(k,j-1);
+      //cout << j << " -> " << Tvec1[0] << " "  << Tvec1[1] << " "  << Tvec1[2] << endl;
+      for (i2=0;i2<3;i2++) for (j2=0;j2<3;j2++) MatIni[i2][j2]+=Tvec1[i2]*Tvec1[j2];
+    }
+  
+  jacobi3(MatIni,ValP,VecP);
+  
+  topDownVec[0]=VecP[0][2];  topDownVec[1]=VecP[1][2];  topDownVec[2]=VecP[2][2];  
+  
+  //cout << "       " << VecP[0][0] << " "  << VecP[0][1] << " "  << VecP[0][2] << endl;
+  //cout << "VecP = " << VecP[1][0] << " "  << VecP[1][1] << " "  << VecP[1][2] << endl;
+  //cout << "       " << VecP[2][0] << " "  << VecP[2][1] << " "  << VecP[2][2] << endl;
+  
+  //cout << "ValP: " << ValP[0] << " "  << ValP[1] << " "  << ValP[2] << endl;
+  
+  //1.5.b) one point of the 'top-down' axis
+  
+  tmpFl=0;
+  tmpFl2=0;
+  j=0;//CurveIn.GetElNumber(k)-1;
+  tmpVec1[0]=0; tmpVec1[1]=0; tmpVec1[2]=0; 
+  
+  
+  while ((tmpFl<7)&&(j>=0)&&(j<CurveIn.GetElNumber(k))){
+    tmpVec1[0]+=CurveIn.GetX(k,j);
+    tmpVec1[1]+=CurveIn.GetY(k,j);
+    tmpVec1[2]+=CurveIn.GetZ(k,j);
+    tmpFl2++;
+    j++;
+    cout << j << "   --  ";
+    if (j>0)
+      tmpFl+=sqrt(((CurveIn.GetX(k,j)-CurveIn.GetX(k,j-1))*(CurveIn.GetX(k,j)-CurveIn.GetX(k,j-1)))+((CurveIn.GetY(k,j)-CurveIn.GetY(k,j-1))*(CurveIn.GetY(k,j)-CurveIn.GetY(k,j-1)))+((CurveIn.GetZ(k,j)-CurveIn.GetZ(k,j-1))*(CurveIn.GetZ(k,j)-CurveIn.GetZ(k,j-1))));
+    }
+  cout << endl;
+  topDownVec[3]=tmpVec1[0]/tmpFl2;
+  topDownVec[4]=tmpVec1[1]/tmpFl2;
+  topDownVec[5]=tmpVec1[2]/tmpFl2;
+  
+  cout << "topDownVec:    Direction = (" << topDownVec[0] << " , "  << topDownVec[1] << " , "  << topDownVec[2] <<  ")   /   point = (" << topDownVec[3] << " , "  << topDownVec[4] << " , "  << topDownVec[5] << ")" << endl;
+  
+  
+  
+  
+  //2) EXTRACT THE 2D IMAGES FROM THE 1ST CURVE OF CurveIn
+  
+  //2.1) search the curve of interest and allocate the memory for the output 2d+t image
+  i=0;
+  while (CurveIn.GetElNumber(i)<=1) i++;
+  
+  
+
+  //2.2) extract the 2d images
+  for (j=0;j<CurveIn.GetElNumber(i);j++){
+    //cout << j << " / "  << CurveIn.GetElNumber(i) << "  - a" << endl;
+    //2.2.1) extract the properties of the 2D image
+    
+    //2.2.1.1) local coordinate
+    coordloc[0]=CurveIn.GetX(i,j);
+    coordloc[1]=CurveIn.GetY(i,j);
+    coordloc[2]=CurveIn.GetZ(i,j);
+    
+    
+    //2.2.1.2) local tangent to the centerline
+    if (j==0){
+      nvecloc[0]=CurveIn.GetX(i,j+1)-CurveIn.GetX(i,j);
+      nvecloc[1]=CurveIn.GetY(i,j+1)-CurveIn.GetY(i,j);
+      nvecloc[2]=CurveIn.GetZ(i,j+1)-CurveIn.GetZ(i,j);
+    }
+    else if (j==CurveIn.GetElNumber(i)-1){
+      nvecloc[0]=CurveIn.GetX(i,j)-CurveIn.GetX(i,j-1);
+      nvecloc[1]=CurveIn.GetY(i,j)-CurveIn.GetY(i,j-1);
+      nvecloc[2]=CurveIn.GetZ(i,j)-CurveIn.GetZ(i,j-1);
+    }
+    else{
+      nvecloc[0]=CurveIn.GetX(i,j+1)-CurveIn.GetX(i,j-1);
+      nvecloc[1]=CurveIn.GetY(i,j+1)-CurveIn.GetY(i,j-1);
+      nvecloc[2]=CurveIn.GetZ(i,j+1)-CurveIn.GetZ(i,j-1);
+    }
+    
+    VecNormalize(nvecloc,VoxStep);
+    
+    
+    //2.2.1.3) compute a vector normal to the curve
+    if (j==0){
+      tmpVec1[0]=CurveIn.GetX(i,j+1)-CurveIn.GetX(i,j);
+      tmpVec1[1]=CurveIn.GetY(i,j+1)-CurveIn.GetY(i,j);
+      tmpVec1[2]=CurveIn.GetZ(i,j+1)-CurveIn.GetZ(i,j);
+      
+      tmpVec2[0]=CurveIn.GetX(i,j+2)-CurveIn.GetX(i,j);
+      tmpVec2[1]=CurveIn.GetY(i,j+2)-CurveIn.GetY(i,j);
+      tmpVec2[2]=CurveIn.GetZ(i,j+2)-CurveIn.GetZ(i,j);
+      
+      crossProd_3vec(tmpVec2,tmpVec1,tmpVec3);
+      crossProd_3vec(tmpVec1,tmpVec3,Tvec1);
+    }
+    else if (j==CurveIn.GetElNumber(i)-1){
+      tmpVec1[0]=CurveIn.GetX(i,j)-CurveIn.GetX(i,j-1);
+      tmpVec1[1]=CurveIn.GetY(i,j)-CurveIn.GetY(i,j-1);
+      tmpVec1[2]=CurveIn.GetZ(i,j)-CurveIn.GetZ(i,j-1);
+      
+      tmpVec2[0]=CurveIn.GetX(i,j)-CurveIn.GetX(i,j-2);
+      tmpVec2[1]=CurveIn.GetY(i,j)-CurveIn.GetY(i,j-2);
+      tmpVec2[2]=CurveIn.GetZ(i,j)-CurveIn.GetZ(i,j-2);
+      
+      crossProd_3vec(tmpVec1,tmpVec2,tmpVec3);
+      crossProd_3vec(tmpVec1,tmpVec3,Tvec1);
+    }
+    else{
+      Tvec1[0]=((CurveIn.GetX(i,j+1)+CurveIn.GetX(i,j-1))/2)-CurveIn.GetX(i,j);
+      Tvec1[1]=((CurveIn.GetY(i,j+1)+CurveIn.GetY(i,j-1))/2)-CurveIn.GetY(i,j);
+      Tvec1[2]=((CurveIn.GetZ(i,j+1)+CurveIn.GetZ(i,j-1))/2)-CurveIn.GetZ(i,j);
+    }
+    
+    if ((Tvec1[0]*Tvec1[0])+(Tvec1[1]*Tvec1[1])+(Tvec1[2]*Tvec1[2])<epsilon){
+      Tvec1[0]=1;
+      Tvec1[1]=0;
+      Tvec1[2]=0;
+      cerr << "Normal to the curve not calculated at point " << j  << endl;
+      }
+    
+    VecNormalize(Tvec1,VoxStep);
+    
+    //2.2.1.4) compute the cross product of nvecloc and Tvec1
+    
+    crossProd_3vec(nvecloc,Tvec1,Tvec2);
+    VecNormalize(Tvec2,VoxStep);  //theoretically not necessary but in case
+    
+    //cout << Tvec1[0] << " "  << Tvec1[1] << " "  << Tvec1[2] << " // "  << Tvec2[0] << " "  << Tvec2[1] << " "  << Tvec2[2] << endl;
+    
+
+
+    //2.2.1.5) update coordloc to estimate the centerline
+    
+    LocationInCurve=static_cast<float>(j)/static_cast<float>(CurveIn.GetElNumber(i)-1);
+    
+
+    ReestimateCentralPoint2(&ImageIn,coordloc,nvecloc,ExpectedDiameter,topDownVec,&RefImageSeries,LocationInCurve,ImageTmp2D,ImageRef2D,out_Info);
+    
+
+    cout << "(" << coordloc[0] << " "  << coordloc[1] << " "  << coordloc[2] << ") -> ("  << out_Info[0] << " "  << out_Info[1] << " "  << out_Info[2] << ")    (reliable="  << out_Info[4] << ")"  << endl;
+    
+    
+    //if (out_Info[4]>0.5){
+    if (out_Info[4]>-1){ //ie all the time
+      CurveOut.PutX(out_Info[0], i, j);
+      CurveOut.PutY(out_Info[1], i, j);
+      CurveOut.PutZ(out_Info[2], i, j);
+      //CurveOut.PutD(out_Info[3], i, j);
+      CurveOut.PutD(out_Info[4], i, j);  //returns the reliability and NOT the diameter
+      
+      coordloc[0]=out_Info[0];
+      coordloc[1]=out_Info[1];
+      coordloc[2]=out_Info[2];
+    }
+
+    /*   Hack made to manually estimate the centerline of image 167 with 40 datapoints instead of the whole step 2.2.1.5
+    float AddX,AddY;
+    if (j==0){ AddX=189-166; AddY=162-166;} if (j==1){ AddX=195-166; AddY=170-166;} if (j==2){ AddX=195-166; AddY=177-166;} if (j==3){ AddX=195-166; AddY=180-166;} if (j==4){ AddX=199-166; AddY=173-166;} if (j==5){ AddX=198-166; AddY=175-166;}     if (j==6){ AddX=196-166; AddY=177-166;} if (j==7){ AddX=196-166; AddY=175-166;} if (j==8){ AddX=199-166; AddY=172-166;} if (j==9){ AddX=196-166; AddY=176-166;} if (j==10){ AddX=196-166; AddY=176-166;}
+    if (j==11){ AddX=196-166; AddY=166-166;} if (j==12){ AddX=195-166; AddY=171-166;} if (j==13){ AddX=195-166; AddY=171-166;} if (j==14){ AddX=195-166; AddY=171-166;} if (j==15){ AddX=195-166; AddY=168-166;}     if (j==16){ AddX=196-166; AddY=166-166;} if (j==17){ AddX=194-166; AddY=160-166;} if (j==18){ AddX=194-166; AddY=166-166;} if (j==19){ AddX=194-166; AddY=164-166;} if (j==20){ AddX=196-166; AddY=162-166;}
+    if (j==21){ AddX=196-166; AddY=162-166;} if (j==22){ AddX=196-166; AddY=162-166;} if (j==23){ AddX=196-166; AddY=166-166;} if (j==24){ AddX=195-166; AddY=168-166;} if (j==25){ AddX=193-166; AddY=156-166;}     if (j==26){ AddX=194-166; AddY=157-166;} if (j==27){ AddX=194-166; AddY=157-166;} if (j==28){ AddX=194-166; AddY=157-166;} if (j==29){ AddX=196-166; AddY=180-166;} if (j==30){ AddX=199-166; AddY=174-166;}
+    if (j==31){ AddX=199-166; AddY=169-166;} if (j==32){ AddX=199-166; AddY=159-166;} if (j==33){ AddX=201-166; AddY=165-166;} if (j==34){ AddX=201-166; AddY=165-166;} if (j==35){ AddX=187-166; AddY=188-166;}     if (j==36){ AddX=185-166; AddY=143-166;} if (j==37){ AddX=199-166; AddY=159-166;} if (j==38){ AddX=158-166; AddY=127-166;} if (j==39){ AddX=166-166; AddY=121-166;}
+
+    coordloc[0]=coordloc[0]+(AddX*Tvec1[0])+(AddY*Tvec2[0]);     coordloc[1]=coordloc[1]+(AddX*Tvec1[1])+(AddY*Tvec2[1]);    coordloc[2]=coordloc[2]+(AddX*Tvec1[2])+(AddY*Tvec2[2]);
+    */
+
+
+  }
+  
+  
+  CurveOut.Write(OutCurveFile);
+  
+      cout << "(" << coordloc[0] << " "  << coordloc[1] << " "  << coordloc[2] << ") -> ("  << out_Info[0] << " "  << out_Info[1] << " "  << out_Info[2] << ")    (reliable="  << out_Info[4] << ")"  << endl;
+
+  cout << "topDownVec was:    Direction = (" << topDownVec[0] << " , "  << topDownVec[1] << " , "  << topDownVec[2] <<  ")   /   point = (" << topDownVec[3] << " , "  << topDownVec[4] << " , "  << topDownVec[5] << ")" << endl;
+
+}
+
+
+
+//estimate the radii on a curve
+int EstimateCochlea(int argc, char **argv){
+  ScalarField ImageIn;
+  LDMK_Curves PointsIn;
+  LDMK_Curves PointsOut;
+  char ImFile[256];
+  char PtsFile[256];
+  char OutPtsFile[256];
+  int i,j,it;
+  float AverageBG,AverageSF,AverageFG;
+  float tmpFl;
+  float coordloc[3];
+  float nvecloc[3];
+  float out_Info[5];
+  float RadiusSearch;
+  int NbPtsToAdd;
+  int LastTreatedSeg;
+  int BreakSeg1,BreakSeg2;
+
+  //1) INIT
+  
+  //read parameters
+  argc--; argv++;
+  strcpy(ImFile,argv[1]);
+  argc--; argv++;
+  strcpy(PtsFile,argv[1]);
+  argc--; argv++;
+  strcpy(OutPtsFile,argv[1]);
+  argc--; argv++;
+  AverageBG= atof(argv[1]);  //average grey level of the BackGround within the cochlea
+  argc--; argv++;
+  AverageSF= atof(argv[1]);  //average grey level of the Small Features within the cochlea
+  argc--; argv++;
+  AverageFG= atof(argv[1]);  //average grey level of the ForeGround <- tissues outside of the cochlea
+  argc--; argv++;
+  RadiusSearch= atof(argv[1]);
+  argc--; argv++;
+  NbPtsToAdd= atoi(argv[1]);
+  argc--; argv++;
+
+  
+  //read image and points of interest
+  PointsIn.Read(PtsFile);
+  
+  //Read the input image
+  ImageIn.Read(ImFile);
+  
+  LastTreatedSeg=-1;
+  
+  //2) REESTIMATE THE CENTER OF ALL EXISTING ELEMENTS
+  for (i=0;i<PointsIn.GetSegNumber();i++) if (PointsIn.GetElNumber(i)>1)
+    for (j=0;j<PointsIn.GetElNumber(i);j++){
+      
+      LastTreatedSeg=i;
+      
+      //local coordinate
+      coordloc[0]=PointsIn.GetX(i,j);
+      coordloc[1]=PointsIn.GetY(i,j);
+      coordloc[2]=PointsIn.GetZ(i,j);
+      
+      //local tangent to the centerline
+      if (j==0){
+        nvecloc[0]=PointsIn.GetX(i,j+1)-PointsIn.GetX(i,j);
+        nvecloc[1]=PointsIn.GetY(i,j+1)-PointsIn.GetY(i,j);
+        nvecloc[2]=PointsIn.GetZ(i,j+1)-PointsIn.GetZ(i,j);
+      }
+      else if (j==PointsIn.GetElNumber(i)-1){
+        nvecloc[0]=PointsIn.GetX(i,PointsIn.GetElNumber(i)-1)-PointsIn.GetX(i,PointsIn.GetElNumber(i)-2);
+        nvecloc[1]=PointsIn.GetY(i,PointsIn.GetElNumber(i)-1)-PointsIn.GetY(i,PointsIn.GetElNumber(i)-2);
+        nvecloc[2]=PointsIn.GetZ(i,PointsIn.GetElNumber(i)-1)-PointsIn.GetZ(i,PointsIn.GetElNumber(i)-2);
+      }
+      else{
+        nvecloc[0]=PointsIn.GetX(i,j+1)-PointsIn.GetX(i,j-1);
+        nvecloc[1]=PointsIn.GetY(i,j+1)-PointsIn.GetY(i,j-1);
+        nvecloc[2]=PointsIn.GetZ(i,j+1)-PointsIn.GetZ(i,j-1);
+      }
+      
+      ReestimateCentralPoint(&ImageIn,RadiusSearch,AverageBG,AverageSF,AverageFG,coordloc,nvecloc,out_Info);
+      
+      //cout << out_Info[0] << " " << out_Info[1] << " " << out_Info[2] << " " << out_Info[3] << " " << out_Info[4] <<  " " << i <<  " " << j << endl;
+      
+      PointsIn.PutX(out_Info[0],i,j);
+      PointsIn.PutY(out_Info[1],i,j);
+      PointsIn.PutZ(out_Info[2],i,j);
+      PointsIn.PutD(out_Info[3],i,j);
+      
+      cout << "El(" << j << ")  -->  " << "Diameter: " << out_Info[3] << " / Reliable:" << out_Info[4] << endl;
+    }
+  
+  if (LastTreatedSeg<0){
+    cout << "No segment in the file" << endl;
+    return 0;
+  }
+  
+  
+  //3) ADD NEW ELEMENTS IN BOTH ENDS OF THE LAST SEGMENT
+  
+  //3.1) create the extended skeleton and copy the existing points in the extended skeleton
+  PointsOut.Create_LDMK_1_Curve(PointsIn.GetElNumber(LastTreatedSeg)+2*NbPtsToAdd);
+  
+  for (j=0;j<PointsIn.GetElNumber(LastTreatedSeg);j++){
+    PointsOut.PutX(PointsIn.GetX(LastTreatedSeg,j),0,NbPtsToAdd+j);
+    PointsOut.PutY(PointsIn.GetY(LastTreatedSeg,j),0,NbPtsToAdd+j);
+    PointsOut.PutZ(PointsIn.GetZ(LastTreatedSeg,j),0,NbPtsToAdd+j);
+    PointsOut.PutD(PointsIn.GetD(LastTreatedSeg,j),0,NbPtsToAdd+j);
+  }
+  
+  //3.2) estimate the new points in the beginning of the segment
+  BreakSeg1=-1;
+  
+  for (j=NbPtsToAdd-1;j>=0;j--) if (BreakSeg1<0){
+    float LocNorm;
+    LocNorm=(PointsOut.GetX(0,j+1)-PointsOut.GetX(0,j+2))*(PointsOut.GetX(0,j+1)-PointsOut.GetX(0,j+2));
+    LocNorm+=(PointsOut.GetY(0,j+1)-PointsOut.GetY(0,j+2))*(PointsOut.GetY(0,j+1)-PointsOut.GetY(0,j+2));
+    LocNorm+=(PointsOut.GetZ(0,j+1)-PointsOut.GetZ(0,j+2))*(PointsOut.GetZ(0,j+1)-PointsOut.GetZ(0,j+2));
+    LocNorm=sqrt(LocNorm);
+    
+    coordloc[0]=PointsOut.GetX(0,j+1)+(0.7*(PointsOut.GetX(0,j+1)-PointsOut.GetX(0,j+2))/LocNorm);
+    coordloc[1]=PointsOut.GetY(0,j+1)+(0.7*(PointsOut.GetY(0,j+1)-PointsOut.GetY(0,j+2))/LocNorm);
+    coordloc[2]=PointsOut.GetZ(0,j+1)+(0.7*(PointsOut.GetZ(0,j+1)-PointsOut.GetZ(0,j+2))/LocNorm);
+    nvecloc[0]=(PointsOut.GetX(0,j+1)-PointsOut.GetX(0,j+2));
+    nvecloc[1]=(PointsOut.GetY(0,j+1)-PointsOut.GetY(0,j+2));
+    nvecloc[2]=(PointsOut.GetZ(0,j+1)-PointsOut.GetZ(0,j+2));
+    
+    ReestimateCentralPoint(&ImageIn,RadiusSearch,AverageBG,AverageSF,AverageFG,coordloc,nvecloc,out_Info);
+    
+    PointsOut.PutX(out_Info[0],0,j);
+    PointsOut.PutY(out_Info[1],0,j);
+    PointsOut.PutZ(out_Info[2],0,j);
+    PointsOut.PutD(out_Info[3],0,j);
+
+    
+    //control the reliability of the points
+    cout << "El(" << j-NbPtsToAdd << ")  -->  " << "Diameter: " << out_Info[3] << " / Reliable:" << out_Info[4] << endl;
+    if (out_Info[4]<0.5) BreakSeg1=j;
+    if (BreakSeg1>0) cout << "--> point not considered!" << endl;
+  }
+  
+  
+  //3.3) estimate the new points in the end of the segment
+  BreakSeg2=-1;
+  
+  for (j=PointsIn.GetElNumber(LastTreatedSeg)+NbPtsToAdd;j<PointsIn.GetElNumber(LastTreatedSeg)+2*NbPtsToAdd;j++) if (BreakSeg2<0){
+    float LocNorm;
+    LocNorm=(PointsOut.GetX(0,j-1)-PointsOut.GetX(0,j-2))*(PointsOut.GetX(0,j-1)-PointsOut.GetX(0,j-2));
+    LocNorm+=(PointsOut.GetY(0,j-1)-PointsOut.GetY(0,j-2))*(PointsOut.GetY(0,j-1)-PointsOut.GetY(0,j-2));
+    LocNorm+=(PointsOut.GetZ(0,j-1)-PointsOut.GetZ(0,j-2))*(PointsOut.GetZ(0,j-1)-PointsOut.GetZ(0,j-2));
+    LocNorm=sqrt(LocNorm);
+    
+    coordloc[0]=PointsOut.GetX(0,j-1)+(0.7*(PointsOut.GetX(0,j-1)-PointsOut.GetX(0,j-2))/LocNorm);
+    coordloc[1]=PointsOut.GetY(0,j-1)+(0.7*(PointsOut.GetY(0,j-1)-PointsOut.GetY(0,j-2))/LocNorm);
+    coordloc[2]=PointsOut.GetZ(0,j-1)+(0.7*(PointsOut.GetZ(0,j-1)-PointsOut.GetZ(0,j-2))/LocNorm);
+    nvecloc[0]=(PointsOut.GetX(0,j-1)-PointsOut.GetX(0,j-2));
+    nvecloc[1]=(PointsOut.GetY(0,j-1)-PointsOut.GetY(0,j-2));
+    nvecloc[2]=(PointsOut.GetZ(0,j-1)-PointsOut.GetZ(0,j-2));
+    
+    ReestimateCentralPoint(&ImageIn,RadiusSearch,AverageBG,AverageSF,AverageFG,coordloc,nvecloc,out_Info);
+    
+    PointsOut.PutX(out_Info[0],0,j);
+    PointsOut.PutY(out_Info[1],0,j);
+    PointsOut.PutZ(out_Info[2],0,j);
+    PointsOut.PutD(out_Info[3],0,j);
+    
+    //control the reliability of the points
+    cout << "El(" << j-NbPtsToAdd << ")  -->  " << "Diameter: " << out_Info[3] << " / Reliable:" << out_Info[4] << endl;
+    if (out_Info[4]<0.5) BreakSeg2=j;
+    if (BreakSeg2>0) cout << "--> point not considered!" << endl;
+  }
+  
+  //3.4) remove unconsidered points if necessary
+  PointsOut.ReduceElNumber(0,BreakSeg1,BreakSeg2);
+
+  
+  //save the reestimated curve field
+  PointsOut.Write(OutPtsFile);
+
+  return 1;
+
+}
+
+
+
+
+
+
+
+
+
+/*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                                        INPUTS MANAGEMENT
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+
+
+void usage(){
+  cerr << "Usage: CochleaAna <options>\n";
+  cerr << "\n";
+  cerr << "Where <options> are the following:\n";
+  cerr << "\n";
+  cerr << "-EstimateCochlea [ImFile] [PtsFile][OutPtsFile] [AverageBG][AverageSF][AverageFG] [RadiusSearch] [MaxNbPtsToAdd]\n";
+  cerr << "    -> [ImFile] contains the image  / [PtsFile] is the mv3d file containing the points  / [OutPtsFile] same as [PtsFile] with reestimated radii.\n";
+  cerr << "    -> [AverageBG] average grey level in the cochlea  / [AverageSF] av.g.l. of the small features in the cochlea  / [AverageFG] av.g.l. of the tissues.\n";
+  cerr << "    -> [RadiusSearch] is the radius of the ROI in which the cochlea boundaries are sought.\n";
+  cerr << "    -> [MaxNbPtsToAdd] Maximum number of points to add in each end of the last segment in the mv3d.\n";
+  cerr << "\n";
+  cerr << "-EstimateCenterlineUsingCurveAtSurface [ImFile][CurveFile]  [Ref2DCenteredImageSeries][ExpectedDiameter] [EstimatedCenterline]\n";
+  cerr << "    -> Estimate the centerline of a cochlea using a curve defined at the cochlear surface.\n";
+  cerr << "    -> [ImFile] contains the image\n";
+  cerr << "    -> [CurveFile] is the mv3d file containing the curve (1st segment of the file) and is not necessarly well centered\n";
+  cerr << "    -> [Ref2DCenteredImageSeries] nifti file following a reference curve which is well centered.\n";
+  cerr << "    -> [ExpectedDiameter] is an estimate of the average diameter in millimeters.\n";
+  cerr << "    -> [EstimatedCenterline] is the output mv3d file containing the reestimated curve (only and 1st segment of the mv3d file)\n";
+  cerr << "\n";
+  cerr << "-FollowCurve [ImFile][CurveFile][Radius] [Out2DimageSeries] <[ZreplacesT][CurveFileInVoxels]>\n";
+  cerr << "    -> Extract a series of 2D slices out of a 3D image following the planes normal to a curve.\n";
+  cerr << "    -> [ImFile] contains the original 3D image  / the mv3d file [CurveFile] contains the curve (1st segment of the file)\n";
+  cerr << "    -> [Radius] is the radius of the ROI in millimeters -> slices have a size [2*Radius]^2 mm^2\n";
+  cerr << "    -> [Out2DimageSeries] contains the slices in x-y planes.\n";
+  cerr << "    -> [ZreplacesT] == 1 => different slices are saved on the Z axis /  T axis otherwise (default=0).\n";
+  cerr << "    -> [CurveFileInVoxels] == 1  => values in [CurveFile] are in voxels and not in millimeters (default=0).\n";
+  cerr << "\n";
+  cerr << "-CurveResampler [InputCurve] [NewElNb] [OutputCurve]>\n";
+  cerr << "    -> Resample the first curve in the mv3d file [InputCurve] with [NewElNb] elements. Results is saved in [OutputCurve].\n";
+  cerr << "\n";
+  cerr << "\n";
+ cerr << "\n";
+  
+  exit(1);
+}
+
+int main(int argc, char **argv){
+  bool done;
+  done=false;
+  
+
+  // Check command line
+  if (argc < 2) {
+    usage();
+  }
+  else {
+    if (done == false) if (strcmp(argv[1], "-EstimateCochlea") == 0) {
+      EstimateCochlea(argc,argv);
+      done = true;
+    }
+    if (done == false) if (strcmp(argv[1], "-FollowCurve") == 0) {
+      FollowCurve(argc,argv);
+      done = true;
+    }
+     if (done == false) if (strcmp(argv[1], "-EstimateCenterlineUsingCurveAtSurface") == 0) {
+      EstimateCenterlineUsingCurveAtSurface(argc,argv);
+      done = true;
+    }
+     if (done == false) if (strcmp(argv[1], "-CurveResampler") == 0) {
+      CurveResampler(argc,argv);
+      done = true;
+    }
+ }
+  
+  return 0;
+}

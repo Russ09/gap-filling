@@ -1,0 +1,136 @@
+/*=========================================================================
+ 
+ Date      : $Date: 18.01.2011$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#ifndef _IRTKLARGEDEFORMATIONGRADIENTLAGRANGE_H
+#define _IRTKLARGEDEFORMATIONGRADIENTLAGRANGE_H
+
+#include <SciCalcPack.h>
+
+
+/**
+ * Class for basic Demons registration
+ */
+
+class LargeDefPWDemons{
+private:
+	
+protected:
+	/// Function to launch the default calculations
+	virtual void Run_Default();
+	
+	
+	/// functions to perform the registration
+	virtual void AllocateAllVariables();
+	virtual void ReadAndTreatInputImages();
+	virtual void SaveResultGradientDescent();
+	virtual void ComputeUpdateFieldSSD(int Step=1);
+	virtual void ComputeUpdateFieldMI(int Step=1);
+	virtual void ControlMaxUpdate(int IterationNb,int Step=1);
+	virtual void ComputeNearestBounda_TempSF_ProjMask();
+  
+	///functions to save and load various structures
+	virtual void LoadVelocityField(char *);
+	virtual void SaveInvTotalDisplacement(VectorField *,VectorField *, char *);
+	virtual void SaveVelocityField(VectorField *,VectorField *, char *);
+	virtual void SaveDeformations(char *);
+  
+	/// Protected parameters
+	//scalar and vector fields
+	ScalarField * ImTemplate;       //3D image  * [nb channels]
+	ScalarField * ImTarget;         //3D image  * [nb channels]
+	ScalarField Mask;
+	ScalarField DeformedTemplate;
+	ScalarField DeformedTarget;
+	ScalarField TempImage;
+	VectorField DisplField;
+	VectorField VelocityField_ID;
+	VectorField VelocityField;
+	VectorField VelocityField_LFreq;
+	VectorField GradE;
+  VectorField IniDispField;
+  
+  
+  //FFT convolver
+  FFTconvolver3D FFTconvolver_fluid;
+  
+  //parameters related to the mutual information
+  MImanager NorMutInfMan;
+	
+  //Quaternion to convert target coordinates into template (=source) coordinates
+  float Target2TemplateCoord[4][4];
+  
+	//size of the fields
+	int NX;
+	int NY;
+	int NZ;
+	int NT;
+
+  //size of the source image
+  int NXs;
+	int NYs;
+	int NZs;
+  
+  
+	
+public:
+	
+	/// Constructor
+	LargeDefPWDemons();
+	
+	/// Destructor
+	~LargeDefPWDemons();
+	
+	/// Run  Large Deformation registration
+	virtual void Run();
+	
+	
+	/// public Parameters
+	int iteration_nb;              //number of iterations 
+	float MaxVelocityUpdate;       //Maximum allowed velocity update at each subdivision and iteration (in voxels)
+	float RefMaxGrad;              //Reference update gradient (typically the value of MaxGrad at the 1st iteration)
+	int Margin;                    //Margin of the image in voxels where the calculations are reduced
+	float alpha;                   //diffusion factor
+  int IndicatorMI;
+	float DefField_TimeSmooth;  // |
+  int   DefField_NbSubdiv;      // |-> if a Gaussian kernel is considered
+	float Update_TimeSmooth;    // |
+	int   Update_NbSubdiv;        // |
+  int GreyLevAlign;              //Grey level linear alignment if !=0
+	float GLA_Padding_Src;         //if grey level alignment: padding value for the source image
+	float GLA_Padding_Trg;         //if grey level alignment: padding value for the target image
+  char PrefixInputs[256];        //Prefix of the files containing an initial velocity field
+	char PrefixOutputs[256];       //Prefix of the files containing the final velocity field
+	char SourceFiles[100][256];   //name of the file(s) containing the source image (or the different source channels) 
+	char TargetFiles[100][256];   //name of the file(s) containing the target image (or the different source channels)
+	char MaskFile[256];           //file containing the mask
+	int MaskDefined;  
+  int NbIdInMask;
+  float * IdInMask;
+	ScalarField ProjMask;
+  VectorField NearestBoundary;
+  ScalarField TempSF;
+	float MaskID;  
+  float lambdaX;            //controls the matching uncertainty
+	float InitMaxUpdateHW;
+	float InitMaxUpdateLW;
+  float MaxUpdateAllowed;
+  float World_Target2Template[4][4]; // in the world domain, affine registration that matches the target image to the template (source) image
+  float x_mm,y_mm,z_mm;   //voxel size in mm
+  int ExtendTrgImag_LowerX;  //
+  int ExtendTrgImag_UpperX;  //
+  int ExtendTrgImag_LowerY;  //
+  int ExtendTrgImag_UpperY;  // -> for the eventual extention of the target image (where the computations are done)
+  int ExtendTrgImag_LowerZ;  //
+  int ExtendTrgImag_UpperZ;  //
+  float UnderSampleTrgFactor;
+  int WhichLF_HF;
+  int BoundaryMargin;
+  
+};
+
+
+#endif

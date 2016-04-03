@@ -1,0 +1,1435 @@
+/*=========================================================================
+ 
+ Date      : $Date: 02.07.2015$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#include <Demons.h>
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                   CONSTRUCTOR AND DESTRUCTOR
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+LargeDefDemons::LargeDefDemons(void){
+  
+  //default parameters
+  iteration_nb=10;
+  alpha=1;
+  DefField_TimeSmooth=0;
+  DefField_NbSubdiv=1;
+  Update_TimeSmooth=2;
+  Update_NbSubdiv=1;
+  NbKernelScales=0;
+  sigma1=1;
+  sigma2=1;
+  sigma3=1;
+  sigma4=1;
+  sigma5=1;
+  sigma6=1;
+  sigma7=1;
+  w1=0;
+  w2=0;
+  w3=0;
+  w4=0;
+  w5=0;
+  w6=0;
+  w7=0;
+  MaxUpdateAllowed=1;
+  Margin=0;
+  IndicatorFFT_fluid=0;
+  IndicatorMI=0;
+  IndicatorLandmarks=0;
+  lambdaX=1;
+  strcpy(PrefixInputs,"Null");
+  strcpy(PrefixOutputs,"Outputs");
+  strcpy(SourceFiles[0],"Null");
+  strcpy(TargetFiles[0],"Null");
+  strcpy(SourceLandmarksFile,"Null");
+  strcpy(TargetLandmarksFile,"Null");
+  NbChannels=0;
+  strcpy(MaskFile,"Null");
+  strcpy(DiscMaskFile,"Null");
+  MaskDefined=0;
+  DiscMaskDefined=0;
+  World_Target2Template[0][0]=1; World_Target2Template[0][1]=0;   World_Target2Template[0][2]=0;    World_Target2Template[0][3]=0;   
+  World_Target2Template[1][0]=0; World_Target2Template[1][1]=1;   World_Target2Template[1][2]=0;    World_Target2Template[1][3]=0;   
+  World_Target2Template[2][0]=0; World_Target2Template[2][1]=0;   World_Target2Template[2][2]=1;    World_Target2Template[2][3]=0;   
+  World_Target2Template[3][0]=0; World_Target2Template[3][1]=0;   World_Target2Template[3][2]=0;    World_Target2Template[3][3]=1;
+  BoundaMargin=30;
+  x_mm=1;
+  y_mm=1;
+  y_mm=1;
+  UnderSampleTrgFactor=1;
+  strcpy(IniDispFieldX,"Null");
+  strcpy(IniDispFieldY,"Null");
+  strcpy(IniDispFieldZ,"Null");
+  IniDispFieldDefined=0;
+  IndicatorSaveDF_Trg2Src = 1;
+  IndicatorSaveDF_Src2Trg = 0;
+  IndicatorSaveDefImag = 0;
+  IndicatorSaveSTdefoSrcImag=0;
+  IndicatorSaveVF = 0;
+  IndicatorMetamo=0;
+  FactorMetamo0=0;
+  lambdaMetamo0=0;
+  lambdaMetamo1=0;
+  lambdaMetamo2=0;
+
+}
+
+LargeDefDemons::~LargeDefDemons(void){}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                        SUB-FUNCTIONS TO PERFORM THE REGISTRATION
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///initiate the gradient descent
+void LargeDefDemons::ReadAndTreatInputImages(void){
+  int x, y, z;
+  int DistClosestEdge;
+  int i,j;
+  double mean1,mean2,std1,std2;
+  float tempQuat[4][4];
+  float TmpFl;
+  ScalarField TempImTarget;
+  char FileTreatedTarget[256];
+  char DotNii[256];
+  
+  //1) CREATE THE SOURCE AND TARGET IMAGES 3D FOR THE CALCULATIONS
+  //    -->  ImTemplate[c].G(x,y,z) = gray level at (x,y,z)
+  //    -->  ImTarget[c].G(x,y,z)  = gray level at (x,y,z)
+  this->ImTemplate = new ScalarField [this->NbChannels];
+  this->ImTarget = new ScalarField [this->NbChannels];
+  
+  //2) READ INPUTS
+  //2.1.a) read source files
+  for (i=0;i<this->NbChannels;i++){
+    this->ImTemplate[i].Read(this->SourceFiles[i]);
+  }
+    
+  //2.1.b) read target files
+  if (fabs(this->UnderSampleTrgFactor-1)<=0.01){
+    
+    // the images do not required any downsampling or domain expansion
+    for (i=0;i<this->NbChannels;i++){
+      this->ImTarget[i].Read(this->TargetFiles[i]);
+    }
+  }
+  else{ // there is at leat a special treatment to do with the target images
+    //name of the treated target file
+    strcpy(FileTreatedTarget,"tmp_");
+    strcpy(DotNii,".nii");
+    
+    strcat(FileTreatedTarget,this->PrefixOutputs);
+    strcat(FileTreatedTarget,DotNii);
+    
+    cout << "After treatments (resampling and/or expansion): " <<  this->TargetFiles[0] << " becomes " << FileTreatedTarget << endl;
+    
+    //treat all the channels
+    for (i=0;i<this->NbChannels;i++){
+      //undersample the image
+      if (fabs(this->UnderSampleTrgFactor-1)>0.01){
+        TempImTarget.Read_and_Undersample(this->TargetFiles[i],this->UnderSampleTrgFactor);
+        TempImTarget.Write(FileTreatedTarget);
+        
+        strcpy(this->TargetFiles[i],FileTreatedTarget);  // a bit dirty but useful as the results are saved in the target coordinate space
+        this->ImTarget[i].Read(this->TargetFiles[i]);
+      }
+    }
+  }
+  
+  //2.1) allocate the memory for the deformed template and eventually the field for metamorphoses
+  this->DeformedTemplate.Read(this->TargetFiles[0]);
+  
+  if ((IndicatorMetamo==1)&&(IndicatorMI==1)) {
+    cout << "Metamorphoses are only coded when using SSD. They won't be computed here.";
+    IndicatorMetamo=0;
+    }
+  
+  if ((IndicatorMetamo==1)&&(IndicatorMI!=1)){
+    this->MetamoField.Read(this->TargetFiles[0]);
+    this->MetamoField.PutToAllVoxels(0);
+    
+    this->UpdateMetamoField.Read(this->TargetFiles[0]);
+    this->UpdateMetamoField.PutToAllVoxels(0);
+    
+      if ((lambdaMetamo1>0)||(lambdaMetamo2>0)){
+          this->MetamoTempSF.Read(this->TargetFiles[0]);
+          this->MetamoTempSF2.Read(this->TargetFiles[0]);
+          this->MetamoRegForces.Read(this->TargetFiles[0]);
+          
+          this->MetamoTempSF.PutToAllVoxels(0);
+          this->MetamoTempSF2.PutToAllVoxels(0);
+          this->MetamoRegForces.PutToAllVoxels(0);
+      }
+  }
+  
+  
+  //2.2) check whether  3D or 2D images are opened
+  if (this->ImTemplate[0].NT>1) cout << "Source image  depends on time!!!";
+  if (this->ImTarget[0].NT>1) cout << "Target image depends on time!!!";
+  
+  //2.3) variables containing the size of the target image (and all the other images, except the source image)
+  this->NX=this->ImTarget[0].NX;
+  this->NY=this->ImTarget[0].NY;
+  this->NZ=this->ImTarget[0].NZ;
+  this->NT=1;
+  
+  //2.4) variables containing the size of the source image
+  this->NXs=this->ImTemplate[0].NX;
+  this->NYs=this->ImTemplate[0].NY;
+  this->NZs=this->ImTemplate[0].NZ;
+  
+  cout << "Image size: " << this->NX <<  "*"  <<  this->NY  <<  "*"  << this->NZ  << " (source: " << this->NXs <<  "*"  <<  this->NYs  <<  "*"  << this->NZs  << ")\n";
+  
+  //2.5) compute the quaternion to convert target coordinates into template coordinates
+  mult_quat4t4mat_quat4t4mat(World_Target2Template,this->ImTarget[0].Image2World,tempQuat);
+  mult_quat4t4mat_quat4t4mat(this->ImTemplate[0].World2Image,tempQuat,Target2TemplateCoord);
+    
+  invert_4t4quaternion(Target2TemplateCoord,Template2TargetCoord);
+  
+  cout << endl;
+  
+  if (IniDispFieldDefined==1){
+    cout << "Target to template encoded in world coordinate by " << this->IniDispFieldX << ", " <<  this->IniDispFieldY << " and " <<  this->IniDispFieldZ << endl;
+  }
+  else{
+    cout << "Target to template in voxel coordinates:" << endl;
+    for (i=0;i<4;i++){
+      for (j=0;j<4;j++){
+        cout << Target2TemplateCoord[i][j] << " ";
+      }
+      cout << endl;
+    }
+  }
+  
+  
+  //2.6 compute the voxels size in mm
+  this->x_mm=sqrt(this->ImTarget[0].Image2World[0][0]*this->ImTarget[0].Image2World[0][0]+this->ImTarget[0].Image2World[0][1]*this->ImTarget[0].Image2World[0][1]+this->ImTarget[0].Image2World[0][2]*this->ImTarget[0].Image2World[0][2]);
+  this->y_mm=sqrt(this->ImTarget[0].Image2World[1][0]*this->ImTarget[0].Image2World[1][0]+this->ImTarget[0].Image2World[1][1]*this->ImTarget[0].Image2World[1][1]+this->ImTarget[0].Image2World[1][2]*this->ImTarget[0].Image2World[1][2]);
+  this->z_mm=sqrt(this->ImTarget[0].Image2World[2][0]*this->ImTarget[0].Image2World[2][0]+this->ImTarget[0].Image2World[2][1]*this->ImTarget[0].Image2World[2][1]+this->ImTarget[0].Image2World[2][2]*this->ImTarget[0].Image2World[2][2]);
+  
+  cout << endl;
+  cout << "Target image resolution: " << this->x_mm << " "  << this->y_mm << " "  << this->z_mm << endl;
+
+  
+  //3) COMPUTE THE MAPPING (in from the target c.s. to the source c.s.)
+  if (IniDispFieldDefined==1) this->ReadAndConvertMapping();  //remark: conversion is mm to voxels
+  
+  //4) LOAD THE DEFORMATION FIELD OR DISPLACEMENT FIELD
+  //    -->  VelocityField.G(0,x,y,z,i)= direction ex of the vector at (x,y,z)
+  //    -->  VelocityField.G(1,x,y,z,i)= direction ey of the vector at (x,y,z)
+  //    -->  VelocityField.G(2,x,y,z,i)= direction ez of the vector at (x,y,z)
+  if (strcmp(PrefixInputs,"Null")!=0){
+    this->LoadVelocityField(PrefixInputs);   //! the velocity field is put in VelocityField !
+  }
+  else{
+     this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ);
+  }
+  
+  
+  //5) READ THE MASKS (standard and for discontinuities) AND PROJECT THEM
+  if (this->MaskDefined==1){ 
+    this->TempSF.Read(this->MaskFile);
+    this->Mask.Read(this->TargetFiles[0]);
+    
+    if ((ImTemplate[0].NX!=this->TempSF.NX)) cout << "The source image and the mask do not have the same size!!!";
+    if ((ImTemplate[0].NY!=this->TempSF.NY)) cout << "The source image and the mask do not have the same size!!!";
+    if ((ImTemplate[0].NZ!=this->TempSF.NZ)) cout << "The source image and the mask do not have the same size!!!";
+    
+    if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->TempSF,&this->Mask,1);
+    if (IniDispFieldDefined!=1) ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->TempSF,&this->Mask,1);
+     
+    this->TempSF.SlashFieldSize(0);
+    
+    //this->Mask.Write("Mask.nii");
+
+  }
+
+  if (this->DiscMaskDefined==1){
+    //... read the mask
+    this->TempSF.Read(this->DiscMaskFile);
+    this->DiscMask.Read(this->TargetFiles[0]);
+    
+    if ((ImTemplate[0].NX!=this->TempSF.NX)) cout << "The source image and the mask for discontinuities do not have the same size!!!";
+    if ((ImTemplate[0].NY!=this->TempSF.NY)) cout << "The source image and the mask for discontinuities do not have the same size!!!";
+    if ((ImTemplate[0].NZ!=this->TempSF.NZ)) cout << "The source image and the mask for discontinuities do not have the same size!!!";
+    
+    if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->TempSF,&this->DiscMask,1);
+    if (IniDispFieldDefined!=1) ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->TempSF,&this->DiscMask,1);
+     
+    this->TempSF.SlashFieldSize(0);
+
+    //6.2.1) distance to the boundary if discontinuous deformations are considered
+    
+    this->NearestBoundary.CreateVoidField(this->NX,this->NY,this->NZ);
+    this->TempSF.CreateVoidField(this->NX,this->NY,this->NZ);
+    
+    //6.2.2) compute the distance map
+    cout << "Compute the distance map" << endl;
+    
+    Cpt_NearestBoundary(&this->DiscMask,&this->NearestBoundary,&this->TempSF);
+   
+   //6.2.3) smooth the distance map and change TempSF
+   LightFFTconvolver3D LocConvolver;
+   LocConvolver.InitiateConvolver(this->TempSF.NX,this->TempSF.NY,this->TempSF.NZ,1,2,2,2);
+   
+   //LocConvolver.Convolution(&this->TempSF);  // to improve: smoothing with no influence of the boundaries
+   LocConvolver.Convolution(&this->NearestBoundary); //remark here that some problem may arise if BoundaMargin is too large: Imagine boundaries = "|       |" -> NearestBoundary = "|1 2 3 -3 -2 -1|"  -> smoothed NearestBoundary = "|1 2 1 -1 -2 -1|"
+   
+   //6.2.4) Define the mask in which the reorientations will performed
+   for (z = 0; z < this->TempSF.NZ; z++)  for (y = 0; y < this->TempSF.NY; y++) for (x = 0; x < this->TempSF.NX; x++) {
+      if ((fabs(this->DiscMask.G(x,y,z)-1)>0.001)||(this->TempSF.G(x,y,z)>this->BoundaMargin)){
+        this->TempSF.P(0,x,y,z);
+        this->NearestBoundary.P(0,0,x,y,z);
+        this->NearestBoundary.P(0,1,x,y,z);
+        this->NearestBoundary.P(0,2,x,y,z);
+      }
+      else{
+        this->TempSF.P(1,x,y,z);
+      }
+      if (fabs(this->DiscMask.G(x,y,z)-1)>0.001){
+        this->DiscMask.P(0,x,y,z);
+      }
+      else{
+        this->DiscMask.P(1,x,y,z);
+      }
+    }
+    
+    //At this point: 
+    // -> TempSF is equal to 1 where reorientation should be considered
+    // -> NearestBoundary points to the nearest boundaries of DiscMask in the whole domain
+    // -> ProjMask is equal to 1 in the ROI where the computations are made and 0 otherwise
+    
+    //this->DiscMask.Write("DiscMask.nii",this->TargetFiles[0]);
+    //this->TempSF.Write("TempSF.nii",this->TargetFiles[0]);
+    //this->NearestBoundary.Write("DMX.nii","DMY.nii","DMZ.nii",this->TargetFiles[0]);
+    
+    cout << "Distance map computed" << endl;
+  }
+  
+      
+  //7) read landmarks
+  if ((this->IndicatorLandmarks==1)&&(this->IniDispFieldDefined==1)){
+    cout << "landmarks registration was not coded with an initial displacement field (only a rigid aligment) -> not used" << endl;
+    this->IndicatorLandmarks=0;
+  }
+
+  if (this->IndicatorLandmarks==1){
+    this->SourceLandmarks.Read(this->SourceLandmarksFile);
+    this->TargetLandmarks.Read(this->TargetLandmarksFile);
+    cout << endl << "Source Landmarks:" << endl;
+    this->SourceLandmarks.Show();
+    cout << endl << "Target Landmarks:" << endl;
+    this->TargetLandmarks.Show();
+    
+    
+    if ((this->SourceLandmarks.Get_LDMK_PointsNumber()==0)||(this->TargetLandmarks.Get_LDMK_PointsNumber()==0)||(this->TargetLandmarks.Get_LDMK_PointsNumber()!=this->SourceLandmarks.Get_LDMK_PointsNumber())){
+      this->IndicatorLandmarks=0;
+      cout << "Unproper number of landmarks -> not used" << endl;
+      }
+  }
+      
+
+}
+
+///allocate all variables used for the gradient descent
+void LargeDefDemons::AllocateAllVariables(void){
+  int i;
+  
+  //contains the gradient of Energy. Is directely used to update the Displacement Field
+  this->GradE.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  if (this->NbChannels>1) this->TempVF.CreateVoidField(this->NX,this->NY,this->NZ);  // usefull to compute the gradients when there are several channels
+  
+  //manage the mutual information
+  if (IndicatorMI==1){
+    if (IniDispFieldDefined==1){
+        ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+    }
+    else{
+        ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+    }
+    
+    this->NorMutInfMan.Initiate(&this->DeformedTemplate,&this->ImTarget[0],50,50,3);
+  }
+  
+  //initiate the FFT convolvers
+  if (sigma1>0.005){
+    //allocate the memory
+    this->FFTconvolver_fluid.InitiateConvolver(this->NX,this->NY,this->NZ);
+    
+    //esimate the weights
+    if (fabs(this->w1)<0.0001){
+      for (i=0;i<this->NbKernelScales;i++){
+        if (i==0) { this->w1=this->EstimRefUpdateScale(sigma1,&this->FFTconvolver_fluid); cout << "Weight for scale 1 is " <<  100     << endl; }
+        if (i==1) { this->w2=this->EstimRefUpdateScale(sigma2,&this->FFTconvolver_fluid); cout << "Weight for scale 2 is " <<  100*this->w2/this->w1 << endl; }
+        if (i==2) { this->w3=this->EstimRefUpdateScale(sigma3,&this->FFTconvolver_fluid); cout << "Weight for scale 3 is " <<  100*this->w3/this->w1 << endl; } 
+        if (i==3) { this->w4=this->EstimRefUpdateScale(sigma4,&this->FFTconvolver_fluid); cout << "Weight for scale 4 is " <<  100*this->w4/this->w1 << endl; }
+        if (i==4) { this->w5=this->EstimRefUpdateScale(sigma5,&this->FFTconvolver_fluid); cout << "Weight for scale 5 is " <<  100*this->w5/this->w1 << endl; }
+        if (i==5) { this->w6=this->EstimRefUpdateScale(sigma6,&this->FFTconvolver_fluid); cout << "Weight for scale 6 is " <<  100*this->w6/this->w1 << endl; }
+        if (i==6) { this->w7=this->EstimRefUpdateScale(sigma7,&this->FFTconvolver_fluid); cout << "Weight for scale 7 is " <<  100*this->w7/this->w1 << endl; }
+      }
+    }
+    
+    w7/=w1;    w6/=w1;    w5/=w1;    w4/=w1;    w3/=w1;    w2/=w1;    w1=1;
+    
+    //set the kernels
+    if (this->NZ>2) this->FFTconvolver_fluid.InitiateConvolver(this->NX,this->NY,this->NZ,
+                                               w1,sigma1/this->x_mm,sigma1/this->y_mm,sigma1/this->z_mm,
+                                               w2,sigma2/this->x_mm,sigma2/this->y_mm,sigma2/this->z_mm,
+                                               w3,sigma3/this->x_mm,sigma3/this->y_mm,sigma3/this->z_mm,
+                                               w4,sigma4/this->x_mm,sigma4/this->y_mm,sigma4/this->z_mm,
+                                               w5,sigma5/this->x_mm,sigma5/this->y_mm,sigma5/this->z_mm,
+                                               w6,sigma6/this->x_mm,sigma6/this->y_mm,sigma6/this->z_mm,
+                                               w7,sigma7/this->x_mm,sigma7/this->y_mm,sigma7/this->z_mm);
+    else this->FFTconvolver_fluid.InitiateConvolver(this->NX,this->NY,this->NZ,
+                                               w1,sigma1/this->x_mm,sigma1/this->y_mm,1,
+                                               w2,sigma2/this->x_mm,sigma2/this->y_mm,1,
+                                               w3,sigma3/this->x_mm,sigma3/this->y_mm,1,
+                                               w4,sigma4/this->x_mm,sigma4/this->y_mm,1,
+                                               w5,sigma5/this->x_mm,sigma5/this->y_mm,1,
+                                               w6,sigma6/this->x_mm,sigma6/this->y_mm,1,
+                                               w7,sigma7/this->x_mm,sigma7/this->y_mm,1);
+  }
+  
+  if (this->sigmaDiff>0.005){
+    if (this->NZ>2) this->FFTconvolver_Diff.InitiateConvolver(this->NX,this->NY,this->NZ,1,this->sigmaDiff/this->x_mm,this->sigmaDiff/this->y_mm,this->sigmaDiff/this->z_mm);
+    else  this->FFTconvolver_Diff.InitiateConvolver(this->NX,this->NY,this->NZ,1,this->sigmaDiff/this->x_mm,this->sigmaDiff/this->y_mm,1);
+  }
+}
+
+
+
+///save the result of the gradient descent
+void LargeDefDemons::ReadAndConvertMapping(void){
+  float flX,flY,flZ;
+  float WTX,WTY,WTZ;
+  float WSX,WSY,WSZ;
+  float ISX,ISY,ISZ;
+  int x,y,z;
+  
+  //read the mapping in the world coordinate system   (IniDispField:  points from target to source in millimeters)
+  this->IniDispField.Read_and_Interpolate(this->IniDispFieldX,this->IniDispFieldY,this->IniDispFieldZ,this->NX,this->NY,this->NZ,0);
+  
+  //convert the mapping in voxel coordonate system (points from target to source in voxels)
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    
+    flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+    
+    WTX=flX*this->ImTarget[0].Image2World[0][0]+flY*this->ImTarget[0].Image2World[0][1]+flZ*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+    WTY=flX*this->ImTarget[0].Image2World[1][0]+flY*this->ImTarget[0].Image2World[1][1]+flZ*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+    WTZ=flX*this->ImTarget[0].Image2World[2][0]+flY*this->ImTarget[0].Image2World[2][1]+flZ*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+    
+    WSX=WTX+this->IniDispField.G(0,x,y,z);
+    WSY=WTY+this->IniDispField.G(1,x,y,z);
+    WSZ=WTZ+this->IniDispField.G(2,x,y,z);
+    
+    ISX=WSX*this->ImTemplate[0].World2Image[0][0]+WSY*this->ImTemplate[0].World2Image[0][1]+WSZ*this->ImTemplate[0].World2Image[0][2]+this->ImTemplate[0].World2Image[0][3];
+    ISY=WSX*this->ImTemplate[0].World2Image[1][0]+WSY*this->ImTemplate[0].World2Image[1][1]+WSZ*this->ImTemplate[0].World2Image[1][2]+this->ImTemplate[0].World2Image[1][3];
+    ISZ=WSX*this->ImTemplate[0].World2Image[2][0]+WSY*this->ImTemplate[0].World2Image[2][1]+WSZ*this->ImTemplate[0].World2Image[2][2]+this->ImTemplate[0].World2Image[2][3];
+    
+    this->IniDispField.P(ISX,0,x,y,z);
+    this->IniDispField.P(ISY,1,x,y,z);
+    this->IniDispField.P(ISZ,2,x,y,z);
+  }
+  
+  //IniDispField.Write("IniDispFieldDemVoxX.nii","IniDispFieldDemVoxY.nii","IniDispFieldDemVoxZ.nii",this->TargetFiles[0]);
+}
+
+
+///save the result of the gradient descent
+void LargeDefDemons::SaveResultGradientDescent(void){
+  VectorField tmpDF;
+  
+  //save the velocity field
+  if (IndicatorSaveVF==1)
+      this->SaveVelocityField(&this->VelocityField,this->PrefixOutputs);
+    
+  //save the final deformation
+  if (IndicatorSaveDefImag==1)
+      this->SaveDefSourceImage(this->PrefixOutputs);
+      
+  //save the spatiotemporal deformation of the source image
+  if (IndicatorSaveSTdefoSrcImag==1)
+      this->SaveTemporalDefSourceImage(this->PrefixOutputs);
+  
+  //save the metamorphosis of the target image
+  if ((IndicatorMetamo==1)&&(IndicatorMI!=1))
+      this->SaveMetamo(this->PrefixOutputs);
+  
+  //save the displacement field and the inverse displacement field...
+  if ((IndicatorSaveDF_Trg2Src==1)||(IndicatorSaveDF_Src2Trg==1))
+      tmpDF.CreateVoidField(this->NX,this->NY,this->NZ);
+    
+  //... inverse displacement field
+  if (IndicatorSaveDF_Trg2Src==1){
+      CptInvDefFromSteadyVeloField(&this->VelocityField,&tmpDF,7);
+      this->SaveInvTotalDisplacement(&tmpDF,this->PrefixOutputs);
+  }
+  
+  //... displacement field
+  if (IndicatorSaveDF_Src2Trg==1){
+    CptDefFromSteadyVeloField(&this->VelocityField,&tmpDF,7);
+    this->SaveTotalDisplacement(&tmpDF,this->PrefixOutputs);
+  }
+  
+  tmpDF.SlashFieldSize(0);
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                          FUNCTIONS TO SAVE AND LOAD THE VARIOUS STRUCTURES
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+
+///load the velocity fields
+void LargeDefDemons::LoadVelocityField(char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char DisplacementField_X[256];
+  char DisplacementField_Y[256];
+  char DisplacementField_Z[256];
+
+  //1) intialisation
+  strcpy(FileNameX,Prefix);
+  strcpy(DisplacementField_X,"_VelocityField_X.nii");
+  strcat(FileNameX,DisplacementField_X);
+  strcpy(FileNameY,Prefix);
+  strcpy(DisplacementField_Y,"_VelocityField_Y.nii");
+  strcat(FileNameY,DisplacementField_Y);
+  strcpy(FileNameZ,Prefix);
+  strcpy(DisplacementField_Z,"_VelocityField_Z.nii");
+  strcat(FileNameZ,DisplacementField_Z);
+  this->VelocityField.Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+}
+
+
+///save the deformation field
+void LargeDefDemons::SaveDisplacementField(VectorField * LocDisplacementField,char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char DisplacementField_X[256];
+  char DisplacementField_Y[256];
+  char DisplacementField_Z[256];
+  
+  //intialisation
+  strcpy(FileNameX,Prefix);
+  strcpy(DisplacementField_X,"_DisplacementField_X.nii");
+  strcat(FileNameX,DisplacementField_X);
+  strcpy(FileNameY,Prefix);
+  strcpy(DisplacementField_Y,"_DisplacementField_Y.nii");
+  strcat(FileNameY,DisplacementField_Y);
+  strcpy(FileNameZ,Prefix);
+  strcpy(DisplacementField_Z,"_DisplacementField_Z.nii");
+  strcat(FileNameZ,DisplacementField_Z);
+  
+  //save the deformation field
+  LocDisplacementField->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+}
+
+
+///save the inverse displacement field
+void LargeDefDemons::SaveInvTotalDisplacement(VectorField * LocDisplacementField,char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char InvDisplacementField_X[256];
+  char InvDisplacementField_Y[256];
+  char InvDisplacementField_Z[256];
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tempQuat[4][4];
+  int x,y,z;
+  float flX,flY,flZ;
+  float tmpX2,tmpY2,tmpZ2;
+  
+  //intialisation
+  strcpy(FileNameX,Prefix);
+  strcpy(InvDisplacementField_X,"_DispField_Trg2Src_X.nii");
+  strcat(FileNameX,InvDisplacementField_X);
+  strcpy(FileNameY,Prefix);
+  strcpy(InvDisplacementField_Y,"_DispField_Trg2Src_Y.nii");
+  strcat(FileNameY,InvDisplacementField_Y);
+  strcpy(FileNameZ,Prefix);
+  strcpy(InvDisplacementField_Z,"_DispField_Trg2Src_Z.nii");
+  strcat(FileNameZ,InvDisplacementField_Z);
+  
+  
+  
+  
+  
+  if (IniDispFieldDefined!=1){  //+++++++ Case A: Only an initial affine alignment is considered between the images +++++++
+    
+    //compute the inverse of the total displacement field in mm (world coordinate)
+    mult_quat4t4mat_quat4t4mat(World_Target2Template,this->ImTarget[0].Image2World,tempQuat);
+    
+    //compute the mapping
+    for (z = 0; z < LocDisplacementField->NZ; z++)  for (y = 0; y < LocDisplacementField->NY; y++) for (x = 0; x < LocDisplacementField->NX; x++){
+      trgX=x*this->ImTarget[0].Image2World[0][0]+y*this->ImTarget[0].Image2World[0][1]+z*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+      trgY=x*this->ImTarget[0].Image2World[1][0]+y*this->ImTarget[0].Image2World[1][1]+z*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+      trgZ=x*this->ImTarget[0].Image2World[2][0]+y*this->ImTarget[0].Image2World[2][1]+z*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+      
+      tmpX=x+LocDisplacementField->G(0,x,y,z);
+      tmpY=y+LocDisplacementField->G(1,x,y,z);
+      tmpZ=z+LocDisplacementField->G(2,x,y,z);
+      
+      srcX=tmpX*tempQuat[0][0]+tmpY*tempQuat[0][1]+tmpZ*tempQuat[0][2]+tempQuat[0][3];
+      srcY=tmpX*tempQuat[1][0]+tmpY*tempQuat[1][1]+tmpZ*tempQuat[1][2]+tempQuat[1][3];
+      srcZ=tmpX*tempQuat[2][0]+tmpY*tempQuat[2][1]+tmpZ*tempQuat[2][2]+tempQuat[2][3];
+      
+      LocDisplacementField->P(srcX-trgX,0,x,y,z);
+      LocDisplacementField->P(srcY-trgY,1,x,y,z);
+      LocDisplacementField->P(srcZ-trgZ,2,x,y,z);
+    }
+  
+  }
+  else{ //+++++++ Case B: The initial alignment between the images is encoded in a displacement field +++++++
+   
+    for (z = 0; z < LocDisplacementField->NZ; z++)  for (y = 0; y < LocDisplacementField->NY; y++) for (x = 0; x < LocDisplacementField->NX; x++){
+      flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+      
+      trgX=x*this->ImTarget[0].Image2World[0][0]+y*this->ImTarget[0].Image2World[0][1]+z*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+      trgY=x*this->ImTarget[0].Image2World[1][0]+y*this->ImTarget[0].Image2World[1][1]+z*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+      trgZ=x*this->ImTarget[0].Image2World[2][0]+y*this->ImTarget[0].Image2World[2][1]+z*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+      
+      tmpX=flX+LocDisplacementField->G(0,x,y,z);
+      tmpY=flY+LocDisplacementField->G(1,x,y,z);
+      tmpZ=flZ+LocDisplacementField->G(2,x,y,z);
+      
+      tmpX2=this->IniDispField.G(0,tmpX,tmpY,tmpZ);
+      tmpY2=this->IniDispField.G(1,tmpX,tmpY,tmpZ);
+      tmpZ2=this->IniDispField.G(2,tmpX,tmpY,tmpZ);
+      
+      srcX=tmpX2*this->ImTemplate[0].Image2World[0][0]+tmpY2*this->ImTemplate[0].Image2World[0][1]+tmpZ2*this->ImTemplate[0].Image2World[0][2]+this->ImTemplate[0].Image2World[0][3];
+      srcY=tmpX2*this->ImTemplate[0].Image2World[1][0]+tmpY2*this->ImTemplate[0].Image2World[1][1]+tmpZ2*this->ImTemplate[0].Image2World[1][2]+this->ImTemplate[0].Image2World[1][3];
+      srcZ=tmpX2*this->ImTemplate[0].Image2World[2][0]+tmpY2*this->ImTemplate[0].Image2World[2][1]+tmpZ2*this->ImTemplate[0].Image2World[2][2]+this->ImTemplate[0].Image2World[2][3];
+      
+      LocDisplacementField->P(srcX-trgX,0,x,y,z);
+      LocDisplacementField->P(srcY-trgY,1,x,y,z);
+      LocDisplacementField->P(srcZ-trgZ,2,x,y,z);
+    }
+    
+  }
+  
+  
+  //save the deformation field
+  LocDisplacementField->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+}
+
+
+
+///save the displacement field
+void LargeDefDemons::SaveTotalDisplacement(VectorField * LocDisplacementField,char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char InvDisplacementField_X[256];
+  char InvDisplacementField_Y[256];
+  char InvDisplacementField_Z[256];
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tempQuat[4][4];
+  float tempQuat2[4][4];
+  int x,y,z;
+  float flX,flY,flZ;
+  float tmpX2,tmpY2,tmpZ2;
+  VectorField DispField_Src2Trg;
+  float World_Template2Target[4][4];
+  
+  
+  if (IniDispFieldDefined!=1){  //+++++++ Case A: Only an initial affine alignment is considered between the images +++++++
+    
+    //-> here the DF is from the source image to the target image and in the source image domain (standard DF)
+    
+    //intialisation
+    strcpy(FileNameX,Prefix);
+    strcpy(InvDisplacementField_X,"_DispField_Src2Trg_X.nii");
+    strcat(FileNameX,InvDisplacementField_X);
+    strcpy(FileNameY,Prefix);
+    strcpy(InvDisplacementField_Y,"_DispField_Src2Trg_Y.nii");
+    strcat(FileNameY,InvDisplacementField_Y);
+    strcpy(FileNameZ,Prefix);
+    strcpy(InvDisplacementField_Z,"_DispField_Src2Trg_Z.nii");
+    strcat(FileNameZ,InvDisplacementField_Z);
+    
+    DispField_Src2Trg.CreateVoidField(this->ImTemplate[0].NX,this->ImTemplate[0].NY,this->ImTemplate[0].NZ);
+    
+    //transform [template/image domain] to [def template/image domain]
+    invert_4t4quaternion(this->World_Target2Template,World_Template2Target);
+    mult_quat4t4mat_quat4t4mat(World_Template2Target,this->ImTemplate[0].Image2World,tempQuat);
+    mult_quat4t4mat_quat4t4mat(this->ImTarget[0].World2Image,tempQuat,tempQuat2);
+    
+    //compute the mapping
+    for (z = 0; z < this->ImTemplate[0].NZ; z++)  for (y = 0; y < this->ImTemplate[0].NY; y++) for (x = 0; x < this->ImTemplate[0].NX; x++){
+      srcX=x*this->ImTemplate[0].Image2World[0][0]+y*this->ImTemplate[0].Image2World[0][1]+z*this->ImTemplate[0].Image2World[0][2]+this->ImTemplate[0].Image2World[0][3];
+      srcY=x*this->ImTemplate[0].Image2World[1][0]+y*this->ImTemplate[0].Image2World[1][1]+z*this->ImTemplate[0].Image2World[1][2]+this->ImTemplate[0].Image2World[1][3];
+      srcZ=x*this->ImTemplate[0].Image2World[2][0]+y*this->ImTemplate[0].Image2World[2][1]+z*this->ImTemplate[0].Image2World[2][2]+this->ImTemplate[0].Image2World[2][3];
+      
+      tmpX=x*tempQuat2[0][0]+y*tempQuat2[0][1]+z*tempQuat2[0][2]+tempQuat2[0][3];
+      tmpY=x*tempQuat2[1][0]+y*tempQuat2[1][1]+z*tempQuat2[1][2]+tempQuat2[1][3];
+      tmpZ=x*tempQuat2[2][0]+y*tempQuat2[2][1]+z*tempQuat2[2][2]+tempQuat2[2][3];
+      
+      tmpX2=tmpX+LocDisplacementField->G(0,tmpX,tmpY,tmpZ);
+      tmpY2=tmpY+LocDisplacementField->G(1,tmpX,tmpY,tmpZ);
+      tmpZ2=tmpZ+LocDisplacementField->G(2,tmpX,tmpY,tmpZ);
+      
+      trgX=tmpX2*this->ImTarget[0].Image2World[0][0]+tmpY2*this->ImTarget[0].Image2World[0][1]+tmpZ2*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+      trgY=tmpX2*this->ImTarget[0].Image2World[1][0]+tmpY2*this->ImTarget[0].Image2World[1][1]+tmpZ2*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+      trgZ=tmpX2*this->ImTarget[0].Image2World[2][0]+tmpY2*this->ImTarget[0].Image2World[2][1]+tmpZ2*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+      
+      DispField_Src2Trg.P(trgX-srcX,0,x,y,z);
+      DispField_Src2Trg.P(trgY-srcY,1,x,y,z);
+      DispField_Src2Trg.P(trgZ-srcZ,2,x,y,z);
+      
+      DispField_Src2Trg.Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);  //
+    }
+  }
+  else{ //+++++++ Case B: The initial alignment between the images is encoded in a displacement field +++++++
+    
+    //-> here the DF is from the source image -- deformed by the inital alignment -- to the target image and in the target image domain (we would need the inverse of IniDispField to compute a standard DF)
+    
+    //intialisation
+    strcpy(FileNameX,Prefix);
+    strcpy(InvDisplacementField_X,"_DispField_InitDefSrc2Trg_X.nii");
+    strcat(FileNameX,InvDisplacementField_X);
+    strcpy(FileNameY,Prefix);
+    strcpy(InvDisplacementField_Y,"_DispField_InitDefSrc2Trg_Y.nii");
+    strcat(FileNameY,InvDisplacementField_Y);
+    strcpy(FileNameZ,Prefix);
+    strcpy(InvDisplacementField_Z,"_DispField_InitDefSrc2Trg_Z.nii");
+    strcat(FileNameZ,InvDisplacementField_Z);
+    
+    cout << "Remark: the displacement field from the source to the target image is actually from the + source image after initial alignment in the target domain + to the target image " << endl;
+    
+    //compute the mapping
+    for (z = 0; z < LocDisplacementField->NZ; z++)  for (y = 0; y < LocDisplacementField->NY; y++) for (x = 0; x < LocDisplacementField->NX; x++){
+      flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+      
+      srcX=x*this->ImTarget[0].Image2World[0][0]+y*this->ImTarget[0].Image2World[0][1]+z*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+      srcY=x*this->ImTarget[0].Image2World[1][0]+y*this->ImTarget[0].Image2World[1][1]+z*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+      srcZ=x*this->ImTarget[0].Image2World[2][0]+y*this->ImTarget[0].Image2World[2][1]+z*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+      
+      tmpX=flX+LocDisplacementField->G(0,x,y,z);
+      tmpY=flY+LocDisplacementField->G(1,x,y,z);
+      tmpZ=flZ+LocDisplacementField->G(2,x,y,z);
+      
+      trgX=tmpX*this->ImTarget[0].Image2World[0][0]+tmpY2*this->ImTarget[0].Image2World[0][1]+tmpZ2*this->ImTarget[0].Image2World[0][2]+this->ImTarget[0].Image2World[0][3];
+      trgY=tmpX*this->ImTarget[0].Image2World[1][0]+tmpY2*this->ImTarget[0].Image2World[1][1]+tmpZ2*this->ImTarget[0].Image2World[1][2]+this->ImTarget[0].Image2World[1][3];
+      trgZ=tmpX*this->ImTarget[0].Image2World[2][0]+tmpY2*this->ImTarget[0].Image2World[2][1]+tmpZ2*this->ImTarget[0].Image2World[2][2]+this->ImTarget[0].Image2World[2][3];
+      
+      LocDisplacementField->P(trgX-srcX,0,x,y,z);
+      LocDisplacementField->P(trgY-srcY,1,x,y,z);
+      LocDisplacementField->P(trgZ-srcZ,2,x,y,z);
+    }
+    //save the deformation field
+    LocDisplacementField->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+  }
+}
+
+
+
+
+
+
+
+///save the Velocity field
+void LargeDefDemons::SaveVelocityField(VectorField * LocVelocityField,char Prefix[256]){
+  char FileNameX[256];
+  char FileNameY[256];
+  char FileNameZ[256];
+  char VelocityField_X[256];
+  char VelocityField_Y[256];
+  char VelocityField_Z[256];
+  
+  //intialisation
+  strcpy(FileNameX,Prefix);
+  strcpy(VelocityField_X,"_VelocityField_X.nii");
+  strcat(FileNameX,VelocityField_X);
+  strcpy(FileNameY,Prefix);
+  strcpy(VelocityField_Y,"_VelocityField_Y.nii");
+  strcat(FileNameY,VelocityField_Y);
+  strcpy(FileNameZ,Prefix);
+  strcpy(VelocityField_Z,"_VelocityField_Z.nii");
+  strcat(FileNameZ,VelocityField_Z);
+
+  //save the Velocity field
+  LocVelocityField->Write(FileNameX,FileNameY,FileNameZ,TargetFiles[0]);
+}
+
+///save the deformations in time subdivisions (not the convergence)
+void LargeDefDemons::SaveDefSourceImage(char Prefix[256]){
+  char FileName[256];
+  char Deformation[256];
+
+  
+  //deformed image
+  strcpy(Deformation,"_FinalDefSrc.nii");
+  strcpy(FileName,Prefix);
+  strcat(FileName,Deformation);
+    
+  if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+  else ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);  
+    
+  
+  this->DeformedTemplate.Write(FileName,this->TargetFiles[0]);
+}
+
+///save intensity changes on of the target image
+void LargeDefDemons::SaveMetamo(char Prefix[256]){
+  char FileName[256];
+  char Metamo[256];
+
+  strcpy(Metamo,"_TrgImMetamorphosis.nii");
+  strcpy(FileName,Prefix);
+  strcat(FileName,Metamo);
+    
+  if ((IndicatorMetamo==1)&&(IndicatorMI!=1))
+    this->MetamoField.Write(FileName,this->TargetFiles[0]);
+}
+
+
+///save the deformations in time subdivisions (not the convergence)
+void LargeDefDemons::SaveTemporalDefSourceImage(char Prefix[256]){
+  char FileName[256];
+  char Deformation[256];
+  ScalarField TempField;
+  int i,x,y,z;
+  float coef;
+  
+  TempField.CreateVoidField(this->NX,this->NY,this->NZ,10);
+  
+  
+  //deformed image
+  strcpy(Deformation,"_Deformation.nii");
+  strcpy(FileName,Prefix);
+  strcat(FileName,Deformation);
+    
+  for (i=0;i<10;i++){
+    coef=static_cast<float>(i)/static_cast<float>(9);
+    if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate,0,coef);
+    else ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate,0,coef);  
+    
+    for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) 
+      TempField.P(this->DeformedTemplate.G(x,y,z),x,y,z,i);
+  }
+  
+  TempField.Write(FileName,this->TargetFiles[0]);
+  
+  TempField.SlashFieldSize(0);
+}
+
+
+///compute the update vector field
+void LargeDefDemons::ComputeUpdateFieldSSD(){
+  float locCoef;
+  float locCoef2;
+  int x,y,z;
+  float epsilon;
+  
+  //1) COMPUTE THE INTENSITY GRADIENTS OF THE DEFORMED SOURCE IMAGE
+  
+  //init variables and gradient
+  epsilon=0.0001;
+  
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    this->GradE.P(0,0,x,y,z);
+    this->GradE.P(0,1,x,y,z);
+    this->GradE.P(0,2,x,y,z);
+  }
+  
+  
+  //project the source image in DeformedTemplate 
+  //compute the temporary deformed template
+  
+  if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+  else ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+  
+  //compute the temporary gradient of the deformed template
+  Cpt_Grad_ScalarField(&this->DeformedTemplate,&this->GradE);
+  
+  float Av1st_term;
+  float Av2nd_term;
+  int NbPts;
+  
+  Av1st_term=0;
+  Av2nd_term=0;
+  NbPts=0;
+  
+  
+  //2) COMPUTE THE NON-SMOOTHED UPDATE FORCES ON THE VF ->  multiply the temporary gradient by the difference between the target and deformed images AND normalize the temporary gradient
+  //2.A) 3D IMAGE - No metamorphosis
+  if ((this->NZ>1)&&(IndicatorMetamo!=1)) for (z = 1+this->Margin; z < this->NZ-1-this->Margin; z++)  for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    locCoef=-(this->ImTarget[0].G(x,y,z)-this->DeformedTemplate.G(x,y,z));
+    locCoef2=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+    
+    
+    if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+      locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+      Av1st_term+=locCoef2;
+      Av2nd_term+=locCoef*locCoef;
+      NbPts++;
+    }
+    else 
+      locCoef=0;
+      
+    this->GradE.P(this->GradE.G(0,x,y,z)*locCoef,0,x,y,z);
+    this->GradE.P(this->GradE.G(1,x,y,z)*locCoef,1,x,y,z);
+    this->GradE.P(this->GradE.G(2,x,y,z)*locCoef,2,x,y,z);
+  }
+  
+  //2.B) 2D IMAGE - No metamorphosis
+  if ((this->NZ==1)&&(IndicatorMetamo!=1)) for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    locCoef=-(this->ImTarget[0].G(x,y)-this->DeformedTemplate.G(x,y));
+    locCoef2=this->GradE.G(0,x,y)*this->GradE.G(0,x,y)+this->GradE.G(1,x,y)*this->GradE.G(1,x,y)+this->GradE.G(2,x,y)*this->GradE.G(2,x,y);
+    
+    
+    if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+      locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+      Av1st_term+=locCoef2;
+      Av2nd_term+=locCoef*locCoef;
+      NbPts++;
+    }
+    else 
+      locCoef=0;
+    
+    this->GradE.P(this->GradE.G(0,x,y)*locCoef,0,x,y);
+    this->GradE.P(this->GradE.G(1,x,y)*locCoef,1,x,y);
+    this->GradE.P(this->GradE.G(2,x,y)*locCoef,2,x,y);
+  }
+  
+  
+  //2.C) 3D IMAGE - with metamorphoses
+  if ((this->NZ>1)&&(IndicatorMetamo==1)) for (z = 1+this->Margin; z < this->NZ-1-this->Margin; z++)  for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    locCoef=-(this->ImTarget[0].G(x,y,z)+this->MetamoField.G(x,y,z)-this->DeformedTemplate.G(x,y,z));
+    locCoef2=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+    
+    
+    if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+      locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+      Av1st_term+=locCoef2;
+      Av2nd_term+=locCoef*locCoef;
+      NbPts++;
+    }
+    else 
+      locCoef=0;
+      
+    this->GradE.P(this->GradE.G(0,x,y,z)*locCoef,0,x,y,z);
+    this->GradE.P(this->GradE.G(1,x,y,z)*locCoef,1,x,y,z);
+    this->GradE.P(this->GradE.G(2,x,y,z)*locCoef,2,x,y,z);
+  }
+  
+  //2.D) 2D IMAGE - with metamorphoses
+  if ((this->NZ==1)&&(IndicatorMetamo==1)) for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+    locCoef=-(this->ImTarget[0].G(x,y)+this->MetamoField.G(x,y)-this->DeformedTemplate.G(x,y));
+    locCoef2=this->GradE.G(0,x,y)*this->GradE.G(0,x,y)+this->GradE.G(1,x,y)*this->GradE.G(1,x,y)+this->GradE.G(2,x,y)*this->GradE.G(2,x,y);
+    
+    
+    if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+      locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+      Av1st_term+=locCoef2;
+      Av2nd_term+=locCoef*locCoef;
+      NbPts++;
+    }
+    else 
+      locCoef=0;
+    
+    this->GradE.P(this->GradE.G(0,x,y)*locCoef,0,x,y);
+    this->GradE.P(this->GradE.G(1,x,y)*locCoef,1,x,y);
+    this->GradE.P(this->GradE.G(2,x,y)*locCoef,2,x,y);
+  }
+
+  
+  //3) MASK THE FORCES IF REQUIRED
+  if (this->MaskDefined==1)
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        this->GradE.P(this->GradE.G(0,x,y)*this->Mask.G(x,y,z),0,x,y);
+        this->GradE.P(this->GradE.G(1,x,y)*this->Mask.G(x,y,z),1,x,y);
+        this->GradE.P(this->GradE.G(2,x,y)*this->Mask.G(x,y,z),2,x,y);
+    }
+  
+}
+
+
+///compute the update vector field
+void LargeDefDemons::ComputeUpdateFieldLDMK(){
+  int x,y,z;
+  int i,j;
+  float srcx,srcy,srcz;
+  float trgx,trgy,trgz;
+  float srcx_w,srcy_w,srcz_w;
+  float trgx_w,trgy_w,trgz_w;
+  float tmpx,tmpy,tmpz;
+  float gradx,grady,gradz;
+  int intsrcx,intsrcy,intsrcz;
+  
+  //1) init
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    this->GradE.P(0,0,x,y,z);
+    this->GradE.P(0,1,x,y,z);
+    this->GradE.P(0,2,x,y,z);
+  }
+  
+  //2) compute the gradients
+  for (i=0;i<this->SourceLandmarks.Get_LDMK_PointsNumber();i++){
+    //2.1) location of the deformed source/template landmarks in the target image domain
+    tmpx=this->SourceLandmarks.GetX(i);
+    tmpy=this->SourceLandmarks.GetY(i);
+    tmpz=this->SourceLandmarks.GetZ(i);
+    
+    srcx=this->ImTemplate[0].World2Image[0][0]*tmpx+this->ImTemplate[0].World2Image[0][1]*tmpy+this->ImTemplate[0].World2Image[0][2]*tmpz+this->ImTemplate[0].World2Image[0][3];
+    srcy=this->ImTemplate[0].World2Image[1][0]*tmpx+this->ImTemplate[0].World2Image[1][1]*tmpy+this->ImTemplate[0].World2Image[1][2]*tmpz+this->ImTemplate[0].World2Image[1][3];
+    srcz=this->ImTemplate[0].World2Image[2][0]*tmpx+this->ImTemplate[0].World2Image[2][1]*tmpy+this->ImTemplate[0].World2Image[2][2]*tmpz+this->ImTemplate[0].World2Image[2][3];
+
+    tmpx=this->Template2TargetCoord[0][0]*srcx+this->Template2TargetCoord[0][1]*srcy+this->Template2TargetCoord[0][2]*srcz+this->Template2TargetCoord[0][3]; //takes into account a possible rigid alignment between the images
+    tmpy=this->Template2TargetCoord[1][0]*srcx+this->Template2TargetCoord[1][1]*srcy+this->Template2TargetCoord[1][2]*srcz+this->Template2TargetCoord[1][3];
+    tmpz=this->Template2TargetCoord[2][0]*srcx+this->Template2TargetCoord[2][1]*srcy+this->Template2TargetCoord[2][2]*srcz+this->Template2TargetCoord[2][3];
+    
+    for (j=0;j<1000;j++){
+      srcx=tmpx+this->VelocityField.G(0,tmpx,tmpy,tmpz)/1000;
+      srcy=tmpy+this->VelocityField.G(1,tmpx,tmpy,tmpz)/1000;
+      srcz=tmpz+this->VelocityField.G(2,tmpx,tmpy,tmpz)/1000;
+
+      tmpx=srcx; tmpy=srcy; tmpz=srcz; 
+    }
+    
+    srcx_w=this->ImTarget[0].Image2World[0][0]*tmpx+this->ImTarget[0].Image2World[0][1]*tmpy+this->ImTarget[0].Image2World[0][2]*tmpz+this->ImTarget[0].Image2World[0][3];
+    srcy_w=this->ImTarget[0].Image2World[1][0]*tmpx+this->ImTarget[0].Image2World[1][1]*tmpy+this->ImTarget[0].Image2World[1][2]*tmpz+this->ImTarget[0].Image2World[1][3];
+    srcz_w=this->ImTarget[0].Image2World[2][0]*tmpx+this->ImTarget[0].Image2World[2][1]*tmpy+this->ImTarget[0].Image2World[2][2]*tmpz+this->ImTarget[0].Image2World[2][3];
+
+    
+    //2.2) location of the deformed template landmarks in the target image domain
+    trgx_w=this->TargetLandmarks.GetX(i);
+    trgy_w=this->TargetLandmarks.GetY(i);
+    trgz_w=this->TargetLandmarks.GetZ(i);
+    
+    trgx=this->ImTarget[0].World2Image[0][0]*trgx_w+this->ImTarget[0].World2Image[0][1]*trgy_w+this->ImTarget[0].World2Image[0][2]*trgz_w+this->ImTarget[0].World2Image[0][3];
+    trgy=this->ImTarget[0].World2Image[1][0]*trgx_w+this->ImTarget[0].World2Image[1][1]*trgy_w+this->ImTarget[0].World2Image[1][2]*trgz_w+this->ImTarget[0].World2Image[1][3];
+    trgz=this->ImTarget[0].World2Image[2][0]*trgx_w+this->ImTarget[0].World2Image[2][1]*trgy_w+this->ImTarget[0].World2Image[2][2]*trgz_w+this->ImTarget[0].World2Image[2][3];
+
+    //2.3) define the gradients
+    gradx=trgx_w-srcx_w;
+    grady=trgy_w-srcy_w;
+    gradz=trgz_w-srcz_w;
+    intsrcx=static_cast<int>(srcx+0.5);
+    intsrcy=static_cast<int>(srcy+0.5);
+    intsrcz=static_cast<int>(srcz+0.5);
+    this->GradE.P(gradx,0,intsrcx,intsrcy,intsrcz);
+    this->GradE.P(grady,1,intsrcx,intsrcy,intsrcz);
+    this->GradE.P(gradz,2,intsrcx,intsrcy,intsrcz);
+
+  }
+  
+}
+
+
+
+///compute the update vector field
+void LargeDefDemons::ComputeUpdateFieldSSD_multiChannel(){
+  float locCoef;
+  float locCoef2;
+  int x,y,z;
+  float epsilon;
+  float Av1st_term;
+  float Av2nd_term;
+  int NbPts;
+  int LocChannel;
+  
+  //1) init variables and gradient
+  epsilon=0.0001;
+  
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    this->GradE.P(0,0,x,y,z);
+    this->GradE.P(0,1,x,y,z);
+    this->GradE.P(0,2,x,y,z);
+  }
+
+  //2) loop on the channels
+  for (LocChannel=0;LocChannel<this->NbChannels;LocChannel++){
+    
+    //2.1) initialize the temporary velocity field containing the gradients related to the current channel
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      this->TempVF.P(0,0,x,y,z);
+      this->TempVF.P(0,1,x,y,z);
+      this->TempVF.P(0,2,x,y,z);
+    }
+
+    //2.2) project the source image (or current source channel) in DeformedTemplate 
+    if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->ImTemplate[LocChannel],&this->DeformedTemplate);
+    else ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[LocChannel],&this->DeformedTemplate);
+
+    //2.3) compute the temporary gradient of the deformed template (... the case of 3D and 2D images is distinguished because of the boundary conditions)
+    
+    //2.3.1) compute the gradients of the deformed template
+    Cpt_Grad_ScalarField(&this->DeformedTemplate,&this->TempVF);
+    
+    Av1st_term=0;
+    Av2nd_term=0;
+    NbPts=0;
+
+    //2.3.2) 3D IMAGES ONLY: multiply the temporary gradient by the difference between the target and deformed images AND normalize the temporary gradient
+    if (this->NZ>1) for (z = 1+this->Margin; z < this->NZ-1-this->Margin; z++)  for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+      locCoef=-(this->ImTarget[LocChannel].G(x,y,z)-this->DeformedTemplate.G(x,y,z));
+      locCoef2=this->TempVF.G(0,x,y,z)*this->TempVF.G(0,x,y,z)+this->TempVF.G(1,x,y,z)*this->TempVF.G(1,x,y,z)+this->TempVF.G(2,x,y,z)*this->TempVF.G(2,x,y,z);
+      
+      
+      if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+        locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+        Av1st_term+=locCoef2;
+        Av2nd_term+=locCoef*locCoef;
+        NbPts++;
+      }
+      else 
+        locCoef=0;
+      
+      this->TempVF.P(this->TempVF.G(0,x,y,z)*locCoef,0,x,y,z);
+      this->TempVF.P(this->TempVF.G(1,x,y,z)*locCoef,1,x,y,z);
+      this->TempVF.P(this->TempVF.G(2,x,y,z)*locCoef,2,x,y,z);
+    }
+    
+    //2.3.3) 2D IMAGES ONLY: multiply the temporary gradient by the difference between the target and deformed images AND normalize the temporary gradient
+    if (this->NZ==1) for (y = 1+this->Margin; y < this->NY-1-this->Margin; y++) for (x = 1+this->Margin; x < this->NX-1-this->Margin; x++){
+      locCoef=-(this->ImTarget[LocChannel].G(x,y)-this->DeformedTemplate.G(x,y));
+      locCoef2=this->TempVF.G(0,x,y)*this->TempVF.G(0,x,y)+this->TempVF.G(1,x,y)*this->TempVF.G(1,x,y)+this->TempVF.G(2,x,y)*this->TempVF.G(2,x,y);
+      
+      
+      if ((locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)))>epsilon){
+        locCoef = locCoef/(locCoef2+(locCoef*locCoef/(this->lambdaX*this->lambdaX)));
+        Av1st_term+=locCoef2;
+        Av2nd_term+=locCoef*locCoef;
+        NbPts++;
+      }
+      else 
+        locCoef=0;
+      
+      this->TempVF.P(this->TempVF.G(0,x,y)*locCoef,0,x,y);
+      this->TempVF.P(this->TempVF.G(1,x,y)*locCoef,1,x,y);
+      this->TempVF.P(this->TempVF.G(2,x,y)*locCoef,2,x,y);
+    }
+    
+    //2.4) update the gradients with the contribution of the current channel
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      this->GradE.Add(this->weightsChannels[LocChannel]*this->TempVF.G(0,x,y,z),0,x,y,z);
+      this->GradE.Add(this->weightsChannels[LocChannel]*this->TempVF.G(1,x,y,z),1,x,y,z);
+      this->GradE.Add(this->weightsChannels[LocChannel]*this->TempVF.G(2,x,y,z),2,x,y,z);
+    }
+  }
+
+  //3) compute the final gradient
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    this->GradE.P(this->GradE.G(0,x,y,z)/this->NbChannels,0,x,y,z);
+    this->GradE.P(this->GradE.G(1,x,y,z)/this->NbChannels,1,x,y,z);
+    this->GradE.P(this->GradE.G(2,x,y,z)/this->NbChannels,2,x,y,z);  
+  }
+  
+
+  //mask the image if required
+  if (this->MaskDefined==1)
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        this->GradE.P(this->GradE.G(0,x,y)*this->Mask.G(x,y,z),0,x,y);
+        this->GradE.P(this->GradE.G(1,x,y)*this->Mask.G(x,y,z),1,x,y);
+        this->GradE.P(this->GradE.G(2,x,y)*this->Mask.G(x,y,z),2,x,y);
+      }
+  
+}
+
+
+
+///compute the update vector field
+void LargeDefDemons::ComputeUpdateFieldMI(){
+  float evaMI;
+  int x,y,z;
+  
+  //compute the current deformed source image
+  if (IniDispFieldDefined==1) ProjectImageUsingDispFieldAndSteadyVeloField(&this->IniDispField,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+  else ProjectImageUsingAffineTransfoAndSteadyVeloField(Target2TemplateCoord,&this->VelocityField,&this->ImTemplate[0],&this->DeformedTemplate);
+  
+  this->NorMutInfMan.IndicateSrcHasChanged();
+  
+  //compute the mutual information and update the histograms
+  this->NorMutInfMan.IndicateSrcHasChanged();
+  evaMI=this->NorMutInfMan.EvaluateMI(); //!!! TO CHANGE !!! -> adding a mask
+  cout << "MI: " << evaMI << endl;
+  
+  
+  //evaluate the gradient of mutual information
+  this->NorMutInfMan.EvaluateGradMI(&this->GradE); //!!! TO CHANGE !!! -> adding a mask
+  
+  
+  //mask the image if required
+  if (this->MaskDefined==1)
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        this->GradE.P(this->GradE.G(0,x,y)*this->Mask.G(x,y,z),0,x,y);
+        this->GradE.P(this->GradE.G(1,x,y)*this->Mask.G(x,y,z),1,x,y);
+        this->GradE.P(this->GradE.G(2,x,y)*this->Mask.G(x,y,z),2,x,y);
+      }
+  
+}
+
+
+///compute the update intensity changes (for now based on the L1 regularisation of the intensity differences only)
+///  -> refMultFactor: maximum intensity changes at a given iteration is [refMultFactor] times [the difference between the image intensities]
+///  -> ThreshZero: threshold under which abs(MetamoField) is supposed equal to zero
+void LargeDefDemons::UpdateMetamo(int IterationNb,float refMultFactor,float ThreshZero){
+  int x,y,z;
+  float LocTotalUpdate,signMF;
+  float maxDiff;
+  
+  //1) initiate the different lambdaMetamo at the 1st iteration of the gradient descent
+  if (IterationNb==0){
+    //1.1) lambdaMetamo0
+    if (this->FactorMetamo0>0){
+      maxDiff=0;
+      for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        if (maxDiff<fabs(this->ImTarget[0].G(x,y,z)-this->DeformedTemplate.G(x,y,z)))
+          maxDiff=fabs(this->ImTarget[0].G(x,y,z)-this->DeformedTemplate.G(x,y,z));
+    
+      this->lambdaMetamo0=maxDiff*this->FactorMetamo0;
+    }
+    else
+      this->lambdaMetamo0=0;
+    
+      cout << "lambdaMetamo0 = " << this->lambdaMetamo0 << endl;
+    
+    //1.2) lambdaMetamo1
+    
+      //semi automatic tuning here?
+    
+    cout << "lambdaMetamo1 = " << this->lambdaMetamo1 << endl;
+      
+      
+    //1.3) lambdaMetamo2
+      
+    //semi automatic tuning here?
+      
+    cout << "lambdaMetamo2 = " << this->lambdaMetamo2 << endl;
+  }
+  
+  //2) compute update forces
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        this->UpdateMetamoField.P(this->ImTarget[0].G(x,y,z)+this->MetamoField.G(x,y,z)-this->DeformedTemplate.G(x,y,z),x,y,z);
+  
+  //3) update MetamoField -- eventually after computing local regularisation forces (ideally either lambdaMetamo0, lambdaMetamo1 or lambdaMetamo2 is > 0)
+  //3.1) regularisation is related to the values of MetamoField
+  if (this->lambdaMetamo0>0){
+    PseudoGradMetamoUpdate(&this->MetamoField,&this->UpdateMetamoField,this->lambdaMetamo0,refMultFactor,ThreshZero);
+  }
+  
+  //3.2) regularisation is related to the first order derivatives of MetamoField
+  if (this->lambdaMetamo1>0){
+        //3.2.1) define this->MetamoRegForces here
+      CptMetamoReg1stOrderDerivatives(&this->MetamoField,&this->MetamoRegForces,&this->MetamoTempSF,&this->MetamoTempSF2,this->lambdaMetamo1);
+      
+        //3.2.2) update
+        PseudoGradMetamoUpdate(&this->MetamoField,&this->UpdateMetamoField,&this->MetamoRegForces,refMultFactor,ThreshZero);
+  }
+
+  //3.3) regularisation is related to the second order derivatives of MetamoField
+  if (this->lambdaMetamo2>0){
+        //define this->MetamoRegForces here
+        PseudoGradMetamoUpdate(&this->MetamoField,&this->UpdateMetamoField,&this->MetamoRegForces,refMultFactor,ThreshZero);
+  }
+
+  
+    
+}
+
+
+///control the maximum update. 
+///* if the max update is larger than the initial one -> normalisation of all the update field to this->MaxUpdateAllowed
+///* Othewise -> normalisation of all the update field to this->MaxUpdateAllowed*(max/InitMaxUpdate)
+void LargeDefDemons::ControlMaxUpdate(int IterationNb){
+  float max;
+  int direc,x,y,z;
+  float factor;
+  VectorField tmpDF;
+  
+  max=0;
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    if (max<this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z))
+      max=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+  
+  max=sqrt(max);
+  
+  if (IterationNb==0) InitMaxUpdate=max;
+  
+  if (max>InitMaxUpdate) factor=this->MaxUpdateAllowed/max;
+  else factor=this->MaxUpdateAllowed/InitMaxUpdate;
+  
+  for (direc = 0; direc < 3; direc++) for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) 
+    this->GradE.P(this->GradE.G(direc,x,y,z)*factor,direc,x,y,z);
+}
+
+
+
+///Estimate the reference update scale for a given sigma (in the smoothing kernel) 
+float LargeDefDemons::EstimRefUpdateScale(float sigmaloc,LightFFTconvolver3D * ConvolverLoc){
+  float max,refWght;
+  int d,x,y,z;
+  
+  //1 Compute the gradient
+  if (IndicatorMI==1)
+    this->ComputeUpdateFieldMI();
+  else 
+    this->ComputeUpdateFieldSSD();
+  
+
+  //2 smooth the gradient with the proposed sigma
+  ConvolverLoc->ChangeKernel(1,sigmaloc/this->x_mm,sigmaloc/this->y_mm,sigmaloc/this->z_mm);
+  
+  //SmoothVFUsingFFT(&this->GradE,ConvolverLoc);
+  ConvolverLoc->Convolution(&this->GradE);
+  
+  //3 compute the maximum gradient of energy
+  max=0;
+  for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    if (max<this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z))
+      max=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+  
+  max=sqrt(max);
+  refWght=1/max;
+
+  return refWght;
+}
+
+
+///update the VF using the landmarks information 
+void LargeDefDemons::LandmarksInfluence(int IterationNb){
+    int x,y,z,direc;
+    float locmax;
+    
+    //1 Compute the velocity field gradient
+    this->ComputeUpdateFieldLDMK();
+
+    //2 smooth the velocity field gradient... 
+    if (this->sigma1>0.005){
+      if (this->DiscMaskDefined==1){  // smoothing with discontinuities
+        RemoveNormalContributions(&this->GradE,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm);
+        this->FFTconvolver_fluid.Convolution_Mask_Mirror(&this->GradE,&this->DiscMask);   //remark: DiscMask equals to 1 in the smoothed ROI and equals to 0 otherwise
+        for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (fabs(this->DiscMask.G(x,y,z)-1)>0.01){this->GradE.P(0,0,x,y,z); this->GradE.P(0,1,x,y,z); this->GradE.P(0,2,x,y,z);}
+          RemoveNormalContributions(&this->GradE,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm);
+      }
+      else // homogeneous smoothing
+        this->FFTconvolver_fluid.Convolution(&this->GradE);
+    }
+    
+    //3 control the maximum amplitude of velocity field update
+    locmax=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      if (locmax<this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z))
+        locmax=this->GradE.G(0,x,y,z)*this->GradE.G(0,x,y,z)+this->GradE.G(1,x,y,z)*this->GradE.G(1,x,y,z)+this->GradE.G(2,x,y,z)*this->GradE.G(2,x,y,z);
+    
+    locmax=sqrt(locmax);
+  
+    if (IterationNb==0) this->InitMaxUpdateLDMK=locmax;
+  
+    for (direc = 0; direc < 3; direc++) for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) 
+      this->GradE.P(this->GradE.G(direc,x,y,z)*0.5/this->InitMaxUpdateLDMK,direc,x,y,z);
+    
+    //4 update the velocity field
+    ComposeTwoLogFieldsUsingSum(&this->VelocityField,&this->GradE);
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                      RUN FUNCTIONS
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+///Function to solve the registration using the gradient descent algorithm of Beg 05
+void LargeDefDemons::Run_Default(void){
+  int IterationNb;
+  int x,y,z;
+  
+  
+  //1) INITIALISATION
+  
+  //1.1) Pre-treatment of the inuput images (grey level alignment + margins)
+  this->ReadAndTreatInputImages();
+  
+  //1.2) Allocations of the scalar and vector fields + definition of global parameters
+  this->AllocateAllVariables();
+  
+  
+  //2) GRADIENT DESCENT
+  for (IterationNb=0;IterationNb<this->iteration_nb;IterationNb++){
+    cout << "Iteration Number " << IterationNb+1 << " / " << this->iteration_nb << "\n";
+    
+    //2.1 Compute the velocity field gradient
+    if (IndicatorMI==1)
+      this->ComputeUpdateFieldMI();
+    else{
+      if (this->NbChannels==1) this->ComputeUpdateFieldSSD();
+      else  this->ComputeUpdateFieldSSD_multiChannel();
+    }
+    
+    //2.2 optionally manage intensity gradients (metamorphoses)
+    if ((IndicatorMetamo==1)&&(IndicatorMI!=1))
+      this->UpdateMetamo(IterationNb);
+    
+    //2.3 smooth the velocity field gradient... 
+    if (sigma1>0.005){
+      if (this->DiscMaskDefined==1){  // smoothing with discontinuities
+        RemoveNormalContributions(&this->GradE,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm);
+        this->FFTconvolver_fluid.Convolution_Mask_Mirror(&this->GradE,&this->DiscMask);   //remark: DiscMask equals to 1 in the smoothed ROI and equals to 0 otherwise
+        for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (fabs(this->DiscMask.G(x,y,z)-1)>0.01){this->GradE.P(0,0,x,y,z); this->GradE.P(0,1,x,y,z); this->GradE.P(0,2,x,y,z);}
+          RemoveNormalContributions(&this->GradE,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm);
+      }
+      else // homogeneous smoothing
+        this->FFTconvolver_fluid.Convolution(&this->GradE);
+    }
+    
+    //2.4 control the maximum amplitude of velocity field update
+    this->ControlMaxUpdate(IterationNb);
+    
+    //2.5 update the velocity field
+    //ComposeTwoLogFieldsUsingBCH(&this->VelocityField,&this->GradE);
+    ComposeTwoLogFieldsUsingSum(&this->VelocityField,&this->GradE);
+    
+    //2.6 use landmarks information
+    if (this->IndicatorLandmarks==1)
+      this->LandmarksInfluence(IterationNb);
+    
+    //2.7 smooth the velocity field 
+    if (this->sigmaDiff>0.005){
+      if (this->DiscMaskDefined==1){  // smoothing with discontinuities
+        RemoveNormalContributions(&this->VelocityField,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm);
+        this->FFTconvolver_Diff.Convolution_Mask_Mirror(&this->VelocityField,&this->DiscMask); //remark:  DiscMask equals to 1 in the smoothed ROI and equals to 0 otherwise
+        RemoveNormalContributions(&this->VelocityField,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm);
+      }
+      else // homogeneous smoothing
+        this->FFTconvolver_Diff.Convolution(&this->VelocityField);
+    }
+  }
+  
+  if (this->DiscMaskDefined==1)
+    RemoveNormalContributions(&this->VelocityField,&this->NearestBoundary,&this->TempSF,this->BoundaMargin,this->x_mm,this->y_mm,this->z_mm,1);
+
+  
+  //3) SAVE THE RESULTS
+  this->SaveResultGradientDescent();
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                        MAIN RUN FUNCTION 
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///run function
+void LargeDefDemons::Run(void)
+{
+  this->Run_Default();
+}
+

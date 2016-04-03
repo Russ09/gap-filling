@@ -1,0 +1,1380 @@
+/*=========================================================================
+ 
+ Authors: Francois-Xavier Vialard, Laurent Risser
+ 
+ Disclaimer: This software has been developed for research purposes only, and hence should 
+ not be used as a diagnostic tool. In no event shall the authors or distributors
+ be liable to any direct, indirect, special, incidental, or consequential 
+ damages arising of the use of this software, its documentation, or any 
+ derivatives thereof, even if the authors have been advised of the possibility 
+ of such damage. 
+ 
+ =========================================================================*/
+
+#include <GeoShoot.h>
+#include <fstream>
+
+
+
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///  CONSTRUCTOR AND DESTRUCTOR
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+///constructor
+EulerianShooting::EulerianShooting()
+{
+  //default parameters
+  strcpy(this->SourceImageName,"Null");
+  strcpy(this->TargetImageName,"Null");
+  this->NbTimeSubdivisions=10;
+  this->NbIterations=10;
+  this->weight1 = 100.0; this->sigmaX1 = 3.0; this->sigmaY1 = 3.0; this->sigmaZ1 = 3.0;
+  this->weight2 = 0.0; this->sigmaX2 = 3.0; this->sigmaY2 = 3.0; this->sigmaZ2 = 3.0;
+  this->weight3 = 0.0; this->sigmaX3 = 3.0; this->sigmaY3 = 3.0; this->sigmaZ3 = 3.0;
+  this->weight4 = 0.0; this->sigmaX4 = 3.0; this->sigmaY4 = 3.0; this->sigmaZ4 = 3.0;
+  this->weight5 = 0.0; this->sigmaX5 = 3.0; this->sigmaY5 = 3.0; this->sigmaZ5 = 3.0;
+  this->weight6 = 0.0; this->sigmaX6 = 3.0; this->sigmaY6 = 3.0; this->sigmaZ6 = 3.0;
+  this->weight7 = 0.0; this->sigmaX7 = 3.0; this->sigmaY7 = 3.0; this->sigmaZ7 = 3.0;
+  this->Margin = 3;
+  this->GreyLevAlign = 0;
+  this->GLA_Padding_Src=-1.;
+  this->GLA_Padding_Trg=-1.;
+  this->alpha=0.001;
+  this->MaxUpdate = 0.5;
+  this->indicatorInitialMomentum = 0;
+  this->OutIniMoTxt = 0;
+  this->OutVeloField = 0;
+  this->OutDispField = 0;
+  this->OutDispFieldEvo = 0;
+  this->OutDistEnSim = 0;
+  this->OutDeformation = 0;
+  this->OutDiff_Tpl_DefTrg = 0;
+  this->OutFinalDef = 0;
+  this->indicatorRungeKutta = 0;
+  strcpy(PrefixOutputs,"Outputs");
+  strcpy(PrefixInputs,"Null");
+  strcpy(InputInitialMomentumName,"Null");
+  // Default indicator is MinMod
+  this->indicatorLimiter = 1;
+  this->DeltaX = 1.0;      // To compute the gradient step on the space
+  World_Target2Template[0][0]=1; World_Target2Template[0][1]=0;   World_Target2Template[0][2]=0;    World_Target2Template[0][3]=0;   
+  World_Target2Template[1][0]=0; World_Target2Template[1][1]=1;   World_Target2Template[1][2]=0;    World_Target2Template[1][3]=0;   
+  World_Target2Template[2][0]=0; World_Target2Template[2][1]=0;   World_Target2Template[2][2]=1;    World_Target2Template[2][3]=0;   
+  World_Target2Template[3][0]=0; World_Target2Template[3][1]=0;   World_Target2Template[3][2]=0;    World_Target2Template[3][3]=1; 
+  UnderSampleTplFactor=1;
+}
+
+///destructor
+EulerianShooting::~EulerianShooting(void)
+{
+}
+
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///  INPUT AND ALLOCATION STUFFS
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///Read and treat input images
+void EulerianShooting::ReadAndTreatInputImages(void){
+  int x, y, z;
+  int DistClosestEdge;
+  double mean1,mean2,std1,std2;
+  float PaddingValue;
+  int NbVoxelsOK;
+  int tst;
+  float tempQuat[4][4];
+  float World_Template2Target[4][4];
+  int i,j,k;
+  ScalarField TempImTemplate;
+  char FileTreatedTemplate[256];
+  char DotNii[256];
+  char FileName[256];
+  char InitMomentumNii[256];
+
+  //1) BASIC READING STUFFS
+  
+  //1.1) read the files
+  
+  //1.1.1) template file
+  if (fabs(this->UnderSampleTplFactor-1)<=0.01){  // the template image is not downsampled
+    this->ImTemplate.Read(this->SourceImageName);
+  }
+  else{ // the template image is downsampled
+    //name of the treated target file
+    strcpy(FileTreatedTemplate,this->PrefixOutputs);
+    strcpy(DotNii,"_tmp.nii");
+    strcat(FileTreatedTemplate,DotNii);
+    
+    cout << "After resampling, " <<  this->SourceImageName << " becomes " << FileTreatedTemplate << endl;
+    
+    //undersample the image
+    TempImTemplate.Read_and_Undersample(this->SourceImageName,this->UnderSampleTplFactor);
+    TempImTemplate.Write(FileTreatedTemplate);
+      
+    strcpy(this->SourceImageName,FileTreatedTemplate);  // a bit dirty but useful as the results are saved in the template coordinate space
+    this->ImTemplate.Read(this->SourceImageName);
+  }
+  //1.1.2) Other files
+  
+  ImTarget.Read(this->TargetImageName);
+  TransfoImTarget.Read(this->SourceImageName);  // target image projected in the template image space
+  if (this->indicatorInitialMomentum>0){
+    if (this->indicatorInitialMomentum==1){
+      if (strcmp(PrefixInputs,"Null")!=0){
+        strcpy(FileName,PrefixInputs);
+        strcpy(InitMomentumNii,"_InitMomentum.nii");
+        strcat(FileName,InitMomentumNii);
+        InputInitialMomentum.Read_and_Interpolate(FileName,ImTemplate.NX,ImTemplate.NY,ImTemplate.NZ);
+      }
+      else{
+        InputInitialMomentum.Read_and_Interpolate(this->InputInitialMomentumName,ImTemplate.NX,ImTemplate.NY,ImTemplate.NZ);
+      }
+    }
+    else{
+      //put the input image in the initial momentum map to initiate its headers and size
+      //InputInitialMomentum.Read(this->SourceImageName);
+      InputInitialMomentum.CreateVoidField(ImTemplate.NX,ImTemplate.NY,ImTemplate.NZ,1);
+      //fill the scalar field with the values in the vectorized image
+      float tempFl;
+      FILE * MyFile;
+      
+      MyFile=fopen(this->InputInitialMomentumName,"r");
+      
+      for(z=0;z<ImTemplate.NZ;z++) for(y=0;y<ImTemplate.NY;y++) for(x=0;x<ImTemplate.NX;x++){
+        fscanf(MyFile,"%f\n",&tempFl);
+        InputInitialMomentum.P(tempFl,x, y, z);
+      }
+      
+      fclose(MyFile);
+    }
+  }
+  
+  //1.2) check whether  3D or 2D images are opened
+  if (ImTemplate.NT>1) cout << "Source image depends on time!!!" << endl;
+  if (ImTarget.NT>1) cout << "Target image depends on time!!!" << endl;
+
+  //1.3) check whether source and target images have the same size
+  //if ((ImTemplate.NX!=ImTarget.NX)) cout << "Source and target images do not have the same size!!!";
+  //if ((ImTemplate.NY!=ImTarget.NY)) cout << "Source and target images do not have the same size!!!";
+  //if ((ImTemplate.NZ!=ImTarget.NZ)) cout << "Source and target images do not have the same size!!!";
+  
+  //1.4) variables containing the size of the image
+  this->NX=ImTemplate.NX;
+  this->NY=ImTemplate.NY;
+  this->NZ=ImTemplate.NZ;
+  this->NT=1;
+  
+  cout << "Image size: " << this->NX <<  " , "  <<  this->NY  <<  " , "  << this->NZ  << "\n";
+  
+  
+  //1.5) messages about the image to world properties
+  /*tst=0;
+  if (fabs(ImTemplate.Image2World[0][0]-1)>0.0001) tst=1; if (fabs(ImTemplate.Image2World[0][1]-0)>0.0001) tst=1; if (fabs(ImTemplate.Image2World[0][2]-0)>0.0001) tst=1;
+  if (fabs(ImTemplate.Image2World[1][0]-0)>0.0001) tst=1; if (fabs(ImTemplate.Image2World[1][1]-1)>0.0001) tst=1; if (fabs(ImTemplate.Image2World[1][2]-0)>0.0001) tst=1;
+  if (fabs(ImTemplate.Image2World[2][0]-0)>0.0001) tst=1; if (fabs(ImTemplate.Image2World[2][1]-0)>0.0001) tst=1; if (fabs(ImTemplate.Image2World[2][2]-1)>0.0001) tst=1;
+  
+  if (tst==1){
+    cout << "The image-to-world matrix of the source (template) image should be: 1 0 0 tx ; 0 1 0 ty ; 0 0 1 tz" << endl;
+    cout << "ie: (tx, ty, tz) is any 3D translation but the rotation matrix is identity." << endl;
+    cout << "If not the initial momenta may have no sense... and this is the case here." << endl;
+    cout << "To build an image like this, use the following procedure:" << endl;
+    cout << " (1) Generate an image with satisfactory image-to-world properties using \"uTIlzReg_Tools -CreateVoidImage P.nii [DimX][DimY][DimZ] 1 1 1\"" << endl;
+    cout << " (2) Define the transformation matrix from P.nii to the source image in the world coordinates (using rview, from irtk, for instance)" << endl;
+    cout << " (3) Generate a displacement field which encodes this transformation matrix using: uTIlzReg_Tools -GenerAffineDefDF P.nii [r_xx ... tz] DX.nii DY.nii DZ.nii" << endl;
+    cout << " (4) Project the source image 'Source.nii' into the good coordinate system using: uTIlzReg_Tools -TransfoImag Source.nii DX.nii DY.nii DZ.nii NewSource.nii" << endl;
+  }
+  */
+  
+  //1.6) compute the quaternion to convert target coordinates into template coordinates
+  
+  //... compute the quaternion
+  invert_4t4quaternion(this->World_Target2Template,World_Template2Target);
+  
+  mult_quat4t4mat_quat4t4mat(World_Template2Target,ImTemplate.Image2World,tempQuat);
+  mult_quat4t4mat_quat4t4mat(ImTarget.World2Image,tempQuat,this->Template2TargetCoord);
+  
+  //... show the Template to Target quaternion in image spaces
+  cout << endl;
+  cout << "Template to target:" << endl;
+  for (i=0;i<4;i++){
+    for (j=0;j<4;j++){
+      cout << this->Template2TargetCoord[i][j] << " ";
+    }
+    cout << endl;
+  }
+  
+  //1.7) project the target image in the template image space   (TransfoImTarget already contains the template coordinate system)
+  Project3DImageUsingAffineTransfo(this->Template2TargetCoord,&this->ImTarget,&this->TransfoImTarget);
+  
+  
+  //1.8 compute the voxels size in mm
+  this->x_mm=sqrt(ImTemplate.Image2World[0][0]*ImTemplate.Image2World[0][0]+ImTemplate.Image2World[0][1]*ImTemplate.Image2World[0][1]+ImTemplate.Image2World[0][2]*ImTemplate.Image2World[0][2]);
+  this->y_mm=sqrt(ImTemplate.Image2World[1][0]*ImTemplate.Image2World[1][0]+ImTemplate.Image2World[1][1]*ImTemplate.Image2World[1][1]+ImTemplate.Image2World[1][2]*ImTemplate.Image2World[1][2]);
+  this->z_mm=sqrt(ImTemplate.Image2World[2][0]*ImTemplate.Image2World[2][0]+ImTemplate.Image2World[2][1]*ImTemplate.Image2World[2][1]+ImTemplate.Image2World[2][2]*ImTemplate.Image2World[2][2]);
+  
+  cout << endl;
+  cout << "Template image resolution: " << this->x_mm << " "  << this->y_mm << " "  << this->z_mm << endl;
+  
+  if ((fabs(this->x_mm-this->y_mm)>0.0001)||(fabs(this->x_mm-this->z_mm)>0.0001))
+    cout << "The image-to-world matrix of the source (template) image should be isotropic and this is not the case here!" << endl;
+
+  
+  
+  //1.9 convert the sigmas from mm to voxels
+  this->sigmaX1=this->sigmaX1/x_mm;  this->sigmaY1=this->sigmaY1/y_mm;  this->sigmaZ1=this->sigmaZ1/z_mm;
+  this->sigmaX2=this->sigmaX2/x_mm;  this->sigmaY2=this->sigmaY2/y_mm;  this->sigmaZ2=this->sigmaZ2/z_mm;
+  this->sigmaX3=this->sigmaX3/x_mm;  this->sigmaY3=this->sigmaY3/y_mm;  this->sigmaZ3=this->sigmaZ3/z_mm;
+  this->sigmaX4=this->sigmaX4/x_mm;  this->sigmaY4=this->sigmaY4/y_mm;  this->sigmaZ4=this->sigmaZ4/z_mm;
+  this->sigmaX5=this->sigmaX5/x_mm;  this->sigmaY5=this->sigmaY5/y_mm;  this->sigmaZ5=this->sigmaZ5/z_mm;
+  this->sigmaX6=this->sigmaX6/x_mm;  this->sigmaY6=this->sigmaY6/y_mm;  this->sigmaZ6=this->sigmaZ6/z_mm;
+  this->sigmaX7=this->sigmaX7/x_mm;  this->sigmaY7=this->sigmaY7/y_mm;  this->sigmaZ7=this->sigmaZ7/z_mm;
+  
+  //2) COMPUTE THE MARGINS
+  if (this->NZ > 1)
+  {
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      DistClosestEdge=z+1;
+      if (y+1<DistClosestEdge) DistClosestEdge=y+1;
+      if (x+1<DistClosestEdge) DistClosestEdge=x+1;
+      if (this->NZ-z<DistClosestEdge) DistClosestEdge=this->NZ-z;
+      if (this->NY-y<DistClosestEdge) DistClosestEdge=this->NY-y;
+      if (this->NX-x<DistClosestEdge) DistClosestEdge=this->NX-x;
+      if (DistClosestEdge<=this->Margin)
+      {
+        this->ImTemplate.P(0,x,y,z);
+        this->TransfoImTarget.P(0,x,y,z);
+      }
+    }
+  }
+  else
+  {
+    for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      DistClosestEdge=y+1;
+      if (x+1<DistClosestEdge) DistClosestEdge=x+1;
+      if (this->NY-y<DistClosestEdge) DistClosestEdge=this->NY-y;
+      if (this->NX-x<DistClosestEdge) DistClosestEdge=this->NX-x;
+      if (DistClosestEdge<=this->Margin)
+      {
+        this->ImTemplate.P(0,x,y,0);
+        this->TransfoImTarget.P(0,x,y,0);
+      }
+    }
+  }
+
+  
+  //3) LINEAR ALIGNMENT OF THE GREY LEVELS OF TransfoImTarget ON THOSE OF ImTemplate
+  PaddingValue=10;
+  
+  if (GreyLevAlign!=0){
+    //compute mean and std dev of the source and target images
+    mean1=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTemplate.G(x,y,z)>GLA_Padding_Src){
+      mean1+=(double)this->ImTemplate.G(x,y,z);
+      NbVoxelsOK++;
+    }
+    mean1/=(double)(NbVoxelsOK);
+    
+    mean2=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->TransfoImTarget.G(x,y,z)>GLA_Padding_Trg){
+      mean2+=(double)this->TransfoImTarget.G(x,y,z);
+      NbVoxelsOK++;
+    }
+    mean2/=(double)(NbVoxelsOK);
+    
+    std1=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTemplate.G(x,y,z)>GLA_Padding_Src){
+      std1+=pow((double)this->ImTemplate.G(x,y,z)-mean1,2.);
+      NbVoxelsOK++;
+    }
+    std1/=(double)(NbVoxelsOK);
+    std1=sqrt(std1);
+    
+    std2=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->TransfoImTarget.G(x,y,z)>GLA_Padding_Trg){
+      std2+=pow((double)this->TransfoImTarget.G(x,y,z)-mean2,2.);
+      NbVoxelsOK++;
+    }
+    std2/=(double)(NbVoxelsOK);
+    std2=sqrt(std2);
+    
+    cout << "Template: mean=" << mean1 << ", stddev=" << std1 << ".    Target: mean=" << mean2 << ", stddev=" << std2 << "\n";
+    
+    
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      this->TransfoImTarget.P((this->TransfoImTarget.G(x,y,z)-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1,x,y,z);
+    
+    
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      if ((this->TransfoImTarget.G(x,y,z)<(GLA_Padding_Trg-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1)||(this->TransfoImTarget.G(x,y,z)<GLA_Padding_Src))
+        this->TransfoImTarget.P(0.,x,y,z);
+    
+    //this->TransfoImTarget.Write("TrgRegistration.nii",this->TargetImageName);
+    //this->ImTemplate.Write("SrcRegistration.nii",this->TargetImageName);
+  }
+  
+  
+  //4) normalize the weight of the different scales
+  float sumWgt;
+  
+  if (fabs(this->weight1)>0.01){  //note: automatic tuning of the weights later if this->weight1==0
+    sumWgt=this->weight1+this->weight2+this->weight3+this->weight4+this->weight5+this->weight6+this->weight7;
+    
+    this->weight1/=sumWgt;
+    this->weight2/=sumWgt;
+    this->weight3/=sumWgt;
+    this->weight4/=sumWgt;
+    this->weight5/=sumWgt;
+    this->weight6/=sumWgt;
+    this->weight7/=sumWgt;
+  }
+
+
+}
+
+///allocation of all variables used in the program and tune some options
+void EulerianShooting::AllocateVariablesShooting(void)
+{
+  // distance between two times: there exist NbTime times.
+  this->DeltaTimeSubdiv=1./(static_cast<float>(this->NbTimeSubdivisions-1));
+  
+  // InvDiffeo (or Diffeo) is the list of InvDiffeos (or Diffeo) indexed by the time
+  this->InvDiffeo.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdivisions);
+  this->Diffeo.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdivisions);
+  
+  // velocity field 
+  this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // This is the adjoint of the velocity field
+  this->AdjointVectorField.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // Adjoint variable associated with the image
+  this->AdjointImage.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Variable to store the optimal momentum
+  this->OptimizedMomentum.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // Momentum used in the algorithm
+  this->Momentum.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // The Initial Momentum is at the core of the Shooting method: it is given by the user otherwise the initial momentum is null.
+  this->InitialMomentum.CreateVoidField(this->NX,this->NY,this->NZ,1,0.0);
+  if (this->indicatorInitialMomentum>0) {DeepCopy(&this->InputInitialMomentum,&this->InitialMomentum,0);}
+  
+  // Adjoint momentum
+  this->AdjointMomentum.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Current image in the Shooting method
+  this->Image.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // Gradient of the image
+  this->NablaI.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // Gradient of the adjoint of the momentum
+  this->NablaAdM.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // Temporary variables
+  this->TempAdImage.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  this->TempAdMomentum.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  this->TempScalarField.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempScalarField3.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempVectorField.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempDiffeo.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  this->TempInvDiffeo.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  
+  // Prepare the temporary variables for the different schemes
+  if (this->indicatorRungeKutta==1)
+  {
+    this->TempDiffeoLocalTable = new VectorField[5];
+    this->TempInvDiffeoLocalTable = new VectorField[5];
+    int h;
+    for (h=0;h<5;h++) 
+    {
+      this->TempDiffeoLocalTable[h].CreateVoidField(this->NX,this->NY,this->NZ,1);
+      this->TempInvDiffeoLocalTable[h].CreateVoidField(this->NX,this->NY,this->NZ,1);
+    }
+  }
+  else 
+  {
+    this->TempInvDiffeoLocal.CreateVoidField(this->NX,this->NY,this->NZ,1);
+    this->TempDiffeoLocal.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  }
+  
+  // Gradient of the functional 
+  this->GradientMomentum.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //???
+  int x,y,z;
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++)
+  {
+    TempInvDiffeo.P(static_cast<float>(x),0,x,y,z,0);
+    TempDiffeo.P(static_cast<float>(x),0,x,y,z,0);
+    InvDiffeo.P(static_cast<float>(x),0,x,y,z,0);
+    Diffeo.P(static_cast<float>(x),0,x,y,z,0);
+    TempInvDiffeo.P(static_cast<float>(y),1,x,y,z,0);
+    TempDiffeo.P(static_cast<float>(y),1,x,y,z,0);
+    InvDiffeo.P(static_cast<float>(y),1,x,y,z,0);
+    Diffeo.P(static_cast<float>(y),1,x,y,z,0);
+    TempInvDiffeo.P(static_cast<float>(z),2,x,y,z,0);
+    TempDiffeo.P(static_cast<float>(z),2,x,y,z,0);
+    InvDiffeo.P(static_cast<float>(z),2,x,y,z,0);
+    Diffeo.P(static_cast<float>(z),2,x,y,z,0);
+  }
+  
+  // Initiate the class to filter the velocity field
+ FFTconvolver.InitiateConvolver(this->NX,this->NY,this->NZ,
+         this->weight1,this->sigmaX1,this->sigmaY1,this->sigmaZ1,
+         this->weight2,this->sigmaX2,this->sigmaY2,this->sigmaZ2,
+         this->weight3,this->sigmaX3,this->sigmaY3,this->sigmaZ3,
+         this->weight4,this->sigmaX4,this->sigmaY4,this->sigmaZ4,
+         this->weight5,this->sigmaX5,this->sigmaY5,this->sigmaZ5,
+         this->weight6,this->sigmaX6,this->sigmaY6,this->sigmaZ6,
+         this->weight7,this->sigmaX7,this->sigmaY7,this->sigmaZ7
+         );
+	 
+  //... tune automatically the weigths and update the FFTconvolver is the easy tuning is active
+  if (fabs(this->weight1)<0.001) ReInitiateConvolver_HomoAppaWeights();
+  
+  // choose the spatial scheme: default: UpWind, 1: MinMod, 2: SuperBee
+  switch(this->indicatorLimiter)
+  {
+    case 0 :
+      this->Limiter = this->UpWindLimiter;
+      cout << "Shooting using UpWindLimiter" <<"\n";
+      break;
+    case 2 :
+      this->Limiter = this->SuperBeeLimiter;
+      cout << "Shooting using SuperBeeLimiter" <<"\n";
+      break;
+    default :
+      this->Limiter = this->MinModLimiter;
+      cout << "Shooting using MinModLimiter" <<"\n";
+      break;
+  }
+}
+
+
+
+///Estimate the reference update scale for a given sigma (in the smoothing kernel)
+///we suppose everything is allocated
+void EulerianShooting::ReInitiateConvolver_HomoAppaWeights(){
+  float MaxGrad,refWght;
+  int d,x,y,z,i,j;
+  float LocGrad;
+  float sigmaXloc,sigmaYloc,sigmaZloc,realW1;
+  int ActualSplitKernels;
+  
+  //init
+  Cpt_Grad_ScalarField(&this->TransfoImTarget,&this->NablaI);
+  
+  this->weight1=0;
+  this->weight2=0;
+  this->weight3=0;
+  this->weight4=0;
+  this->weight5=0;
+  this->weight6=0;
+  this->weight7=0;
+  
+  cout << endl;
+  cout << "Check weights: " << endl;
+  
+  //evaluate the weight at each scale
+  for (i=0;i<7;i++){
+    if (i==0) {sigmaXloc=this->sigmaX1; sigmaYloc=this->sigmaY1; sigmaZloc=this->sigmaZ1; }
+    if (i==1) {sigmaXloc=this->sigmaX2; sigmaYloc=this->sigmaY2; sigmaZloc=this->sigmaZ2; }
+    if (i==2) {sigmaXloc=this->sigmaX3; sigmaYloc=this->sigmaY3; sigmaZloc=this->sigmaZ3; }
+    if (i==3) {sigmaXloc=this->sigmaX4; sigmaYloc=this->sigmaY4; sigmaZloc=this->sigmaZ4; }
+    if (i==4) {sigmaXloc=this->sigmaX5; sigmaYloc=this->sigmaY5; sigmaZloc=this->sigmaZ5; }
+    if (i==5) {sigmaXloc=this->sigmaX6; sigmaYloc=this->sigmaY6; sigmaZloc=this->sigmaZ6; }
+    if (i==6) {sigmaXloc=this->sigmaX7; sigmaYloc=this->sigmaY7; sigmaZloc=this->sigmaZ7; }
+    
+    //...init
+    this->FFTconvolver.ChangeKernel(1,sigmaXloc,sigmaYloc,sigmaZloc);
+    
+    //compute the first update
+    for (j=0;j<3;j++){
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        this->FFTconvolver.P(static_cast<float>(0),x,y,z);
+      
+      //compute the scalar field (one dimension out of the vector field) to smooth
+      //3D
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+        if (!((z<this->Margin)||(z>this->NZ-this->Margin-1)||(y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1)))
+          this->FFTconvolver.P( (this->ImTemplate.G(x,y,z) - this->TransfoImTarget.G(x,y,z)) * this->NablaI.G(j,x,y,z),x,y,z);
+      
+      //2D
+      if (this->NZ==1)
+        for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+          if (!((y<this->Margin)||(y>this->NY-this->Margin-1)||(x<this->Margin)||(x>this->NX-this->Margin-1)))
+            this->FFTconvolver.P( (this->ImTemplate.G(x,y,0) - this->TransfoImTarget.G(x,y,0)) * this->NablaI.G(j,x,y,0),x,y,0);
+      
+      //smooth the scalar field
+      FFTconvolver.Convolution();
+      
+      //set the gradient of Energy...
+        for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+          this->NablaAdM.P(-2*FFTconvolver.G(x,y,z),j,x,y,z);
+    }
+    
+    //...3D images
+    MaxGrad=0;
+    for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      LocGrad=sqrt((this->NablaAdM.G(0,x,y,z)*this->NablaAdM.G(0,x,y,z))+(this->NablaAdM.G(1,x,y,z)*this->NablaAdM.G(1,x,y,z)) + (this->NablaAdM.G(2,x,y,z)*this->NablaAdM.G(2,x,y,z)));
+      if (MaxGrad<LocGrad) MaxGrad=LocGrad;
+    }
+    
+    //...2D images
+    if (this->NZ==1){
+      for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+        LocGrad=sqrt((this->NablaAdM.G(0,x,y,0)*this->NablaAdM.G(0,x,y,0))+(this->NablaAdM.G(1,x,y,0)*this->NablaAdM.G(1,x,y,0)));
+        if (MaxGrad<LocGrad) MaxGrad=LocGrad;
+      }
+      cout << MaxGrad << endl;
+    }
+ 
+    if (i==0) {this->weight1=100;  realW1=(1/MaxGrad);      cout << "sigma1 = " << sigmaXloc*x_mm <<  " / weight1 = " << this->weight1 << endl;}
+    if (i==1) {this->weight2=100*(1/MaxGrad)/realW1;        cout << "sigma2 = " << sigmaXloc*x_mm <<  " / weight2 = " << this->weight2 << endl;}
+    if (i==2) {this->weight3=100*(1/MaxGrad)/realW1;        cout << "sigma3 = " << sigmaXloc*x_mm <<  " / weight3 = " << this->weight3 << endl;}
+    if (i==3) {this->weight4=100*(1/MaxGrad)/realW1;        cout << "sigma4 = " << sigmaXloc*x_mm <<  " / weight4 = " << this->weight4 << endl;}
+    if (i==4) {this->weight5=100*(1/MaxGrad)/realW1;        cout << "sigma5 = " << sigmaXloc*x_mm <<  " / weight5 = " << this->weight5 << endl;}
+    if (i==5) {this->weight6=100*(1/MaxGrad)/realW1;        cout << "sigma6 = " << sigmaXloc*x_mm <<  " / weight6 = " << this->weight6 << endl;}
+    if (i==6) {this->weight7=100*(1/MaxGrad)/realW1;        cout << "sigma7 = " << sigmaXloc*x_mm <<  " / weight7 = " << this->weight7 << endl;}
+  }
+
+  cout << endl;
+  
+  //finalize the job
+  
+  this->FFTconvolver.InitiateConvolver(this->NX,this->NY,this->NZ,this->weight1,this->sigmaX1,this->sigmaY1,this->sigmaZ1,this->weight2,this->sigmaX2,this->sigmaY2,this->sigmaZ2,this->weight3,this->sigmaX3,this->sigmaY3,this->sigmaZ3,this->weight4,this->sigmaX4,this->sigmaY4,this->sigmaZ4,this->weight5,this->sigmaX5,this->sigmaY5,this->sigmaZ5,this->weight6,this->sigmaX6,this->sigmaY6,this->sigmaZ6,this->weight7,this->sigmaX7,this->sigmaY7,this->sigmaZ7);
+
+  this->NablaAdM.PutToAllVoxels(0);
+  this->NablaI.PutToAllVoxels(0);
+}
+
+
+
+
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///  ENERGY MINIMISATION
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+/// Implements the advection scheme on the inverse of the diffeomorphism and the Euler scheme on the diffeomorphism
+void EulerianShooting::SchemeStep(void)
+{
+  TransportMomentum(&this->InitialMomentum, &this->TempInvDiffeo, &this->Momentum, this->DeltaX);
+  TransportImage(&this->ImTemplate, &this->TempInvDiffeo, &this->Image);
+  Cpt_Grad_ScalarField(&this->Image,&this->NablaI,0,this->DeltaX);
+  ComputeVelocityField();
+  int j,x,y,z;
+  float temp,deltaBB,deltaB,deltaF,deltaFF,eta;
+  float maxEta = 0.0;
+        this->TempInvDiffeoLocal.PutToAllVoxels(0.0);
+        this->TempDiffeoLocal.PutToAllVoxels(0.0);
+  for (j=0;j<3;j++)
+  {
+    for (z = 2; z < this->NZ-2; z++) for (y = 2; y < this->NY-2; y++) for (x = 2; x < this->NX-2; x++)
+    {
+      temp=0.0;
+      /// Computation on the first dimension of the scheme.
+      eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(0,x,y,z);
+      if (abs(eta)>maxEta){maxEta = abs(eta);}
+      deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x-1,y,z));
+      deltaF = (this->TempInvDiffeo.G(j,x+1,y,z) - this->TempInvDiffeo.G(j,x,y,z));
+      if (eta>=0.0)
+      {
+        deltaBB = (this->TempInvDiffeo.G(j,x-1,y,z) - this->TempInvDiffeo.G(j,x-2,y,z));
+        temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+      }
+      else
+      {
+        deltaFF = (this->TempInvDiffeo.G(j,x+2,y,z) - this->TempInvDiffeo.G(j,x+1,y,z));        
+        temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+      }
+      /// Computation on the second dimension of the scheme.
+      eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(1,x,y,z);
+      if (abs(eta)>maxEta){maxEta = abs(eta);}
+      deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x,y-1,z));
+      deltaF = (this->TempInvDiffeo.G(j,x,y+1,z) - this->TempInvDiffeo.G(j,x,y,z));
+      if (eta>=0.0)
+      {
+        deltaBB = (this->TempInvDiffeo.G(j,x,y-1,z) - this->TempInvDiffeo.G(j,x,y-2,z));
+        temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+      }
+      else
+      {
+        deltaFF = (this->TempInvDiffeo.G(j,x,y+2,z) - this->TempInvDiffeo.G(j,x,y+1,z));        
+        temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+      }
+      /// Computation on the third dimension of the scheme.
+      eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(2,x,y,z);
+      if (abs(eta)>maxEta){maxEta = abs(eta);}
+      deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x,y,z-1));
+      deltaF = (this->TempInvDiffeo.G(j,x,y,z+1) - this->TempInvDiffeo.G(j,x,y,z));
+      if (eta>=0.0)
+      {
+        deltaBB = (this->TempInvDiffeo.G(j,x,y,z-1) - this->TempInvDiffeo.G(j,x,y,z-2));
+        temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+      }
+      else
+      {
+        deltaFF = (this->TempInvDiffeo.G(j,x,y,z+2) - this->TempInvDiffeo.G(j,x,y,z+1));        
+        temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+      }
+      this->TempInvDiffeoLocal.P(temp,j,x,y,z);
+    }
+  }
+  if (this->NZ==1)
+  {
+    z=0;
+    for (j=0;j<2;j++)
+    {
+      for (y = 2; y < this->NY-2; y++) for (x = 2; x < this->NX-2; x++)
+      {
+        temp=0.0;
+        /// Computation on the first dimension of the scheme.
+        eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(0,x,y,z);
+        if (abs(eta)>maxEta){maxEta = abs(eta);}
+        deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x-1,y,z));
+        deltaF = (this->TempInvDiffeo.G(j,x+1,y,z) - this->TempInvDiffeo.G(j,x,y,z));
+        if (eta>=0.0)
+        {
+          deltaBB = (this->TempInvDiffeo.G(j,x-1,y,z) - this->TempInvDiffeo.G(j,x-2,y,z));
+          temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+        }
+        else
+        {
+          deltaFF = (this->TempInvDiffeo.G(j,x+2,y,z) - this->TempInvDiffeo.G(j,x+1,y,z));        
+          temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+        }
+        /// Computation on the second dimension of the scheme.
+        eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(1,x,y,z);
+        if (abs(eta)>maxEta){maxEta = abs(eta);}
+        deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x,y-1,z));
+        deltaF = (this->TempInvDiffeo.G(j,x,y+1,z) - this->TempInvDiffeo.G(j,x,y,z));
+        if (eta>=0.0)
+        {
+          deltaBB = (this->TempInvDiffeo.G(j,x,y-1,z) - this->TempInvDiffeo.G(j,x,y-2,z));
+          temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+        }
+        else
+        {
+          deltaFF = (this->TempInvDiffeo.G(j,x,y+2,z) - this->TempInvDiffeo.G(j,x,y+1,z));        
+          temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+        }
+        this->TempInvDiffeoLocal.P(temp,j,x,y,z);
+      }
+    }
+  }
+  for (j=0;j<3;j++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+  {
+    this->TempInvDiffeo.Add(this->TempInvDiffeoLocal.G(j,x,y,z),j,x,y,z);
+    this->TempDiffeoLocal.P(this->VelocityField.G(j,this->TempDiffeo.G(0,x,y,z),this->TempDiffeo.G(1,x,y,z),this->TempDiffeo.G(2,x,y,z)),j,x,y,z);  
+  }
+  for (j=0;j<3;j++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+  {
+    this->TempDiffeo.Add(TempDiffeoLocal.G(j,x,y,z) * this->DeltaTimeSubdiv,j,x,y,z);
+  }
+  if (maxEta>1){ cout << " CFL condition not respected  :   " << maxEta <<" > 1" <<"\n"; }
+}
+
+/// Implements the advection scheme on the inverse of the diffeomorphism and the Euler scheme on the diffeomorphism with the corresponding arguments
+void EulerianShooting::SchemeStep(VectorField *TempInvDiffeoLoc, VectorField *TempDiffeoLoc, VectorField *Output1, VectorField *Output2,int t1, int t2)
+{
+  TransportMomentum(&this->InitialMomentum, TempInvDiffeoLoc, &this->Momentum,this->DeltaX);
+  TransportImage(&this->ImTemplate, TempInvDiffeoLoc, &this->Image);
+  Cpt_Grad_ScalarField(&this->Image,&this->NablaI,0,this->DeltaX);
+  ComputeVelocityField();
+  int j,x,y,z;
+  float temp,deltaBB,deltaB,deltaF,deltaFF,eta;
+  float maxEta = 0.0;
+  for (j=0;j<3;j++)
+  {
+    for (z = 2; z < this->NZ-2; z++) for (y = 2; y < this->NY-2; y++) for (x = 2; x < this->NX-2; x++)
+    {
+      temp=0.0;
+      /// Computation on the first dimension of the scheme.
+      eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(0,x,y,z);
+      if (abs(eta)>maxEta){maxEta = abs(eta);}
+      deltaB = (TempInvDiffeoLoc->G(j,x,y,z) - TempInvDiffeoLoc->G(j,x-1,y,z));
+      deltaF = (TempInvDiffeoLoc->G(j,x+1,y,z) - TempInvDiffeoLoc->G(j,x,y,z));
+      if (eta>=0.0)
+      {
+        deltaBB = (TempInvDiffeoLoc->G(j,x-1,y,z) - TempInvDiffeoLoc->G(j,x-2,y,z));
+        temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+      }
+      else
+      {
+        deltaFF = (TempInvDiffeoLoc->G(j,x+2,y,z) - TempInvDiffeoLoc->G(j,x+1,y,z));        
+        temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+      }
+      /// Computation on the second dimension of the scheme.
+      eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(1,x,y,z);
+      if (abs(eta)>maxEta){maxEta = abs(eta);}
+      deltaB = (TempInvDiffeoLoc->G(j,x,y,z) - TempInvDiffeoLoc->G(j,x,y-1,z));
+      deltaF = (TempInvDiffeoLoc->G(j,x,y+1,z) - TempInvDiffeoLoc->G(j,x,y,z));
+      if (eta>=0.0)
+      {
+        deltaBB = (TempInvDiffeoLoc->G(j,x,y-1,z) - TempInvDiffeoLoc->G(j,x,y-2,z));
+        temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+      }
+      else
+      {
+        deltaFF = (TempInvDiffeoLoc->G(j,x,y+2,z) - TempInvDiffeoLoc->G(j,x,y+1,z));        
+        temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+      }
+      /// Computation on the third dimension of the scheme.
+      eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(2,x,y,z);
+      if (abs(eta)>maxEta){maxEta = abs(eta);}
+      deltaB = (TempInvDiffeoLoc->G(j,x,y,z) - TempInvDiffeoLoc->G(j,x,y,z-1));
+      deltaF = (TempInvDiffeoLoc->G(j,x,y,z+1) - TempInvDiffeoLoc->G(j,x,y,z));
+      if (eta>=0.0)
+      {
+        deltaBB = (TempInvDiffeoLoc->G(j,x,y,z-1) - TempInvDiffeoLoc->G(j,x,y,z-2));
+        temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+      }
+      else
+      {
+        deltaFF = (TempInvDiffeoLoc->G(j,x,y,z+2) - TempInvDiffeoLoc->G(j,x,y,z+1));        
+        temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+      }
+      Output1->P(temp,j,x,y,z,t1);
+    }
+  }
+  if (this->NZ==1)
+  {
+    z=0;
+    for (j=0;j<2;j++)
+    {
+      for (y = 2; y < this->NY-2; y++) for (x = 2; x < this->NX-2; x++)
+      {
+        temp=0.0;
+        /// Computation on the first dimension of the scheme.
+        eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(0,x,y,z);
+        if (abs(eta)>maxEta){maxEta = abs(eta);}
+        deltaB = (TempInvDiffeoLoc->G(j,x,y,z) - TempInvDiffeoLoc->G(j,x-1,y,z));
+        deltaF = (TempInvDiffeoLoc->G(j,x+1,y,z) - TempInvDiffeoLoc->G(j,x,y,z));
+        if (eta>=0.0)
+        {
+          deltaBB = (TempInvDiffeoLoc->G(j,x-1,y,z) - TempInvDiffeoLoc->G(j,x-2,y,z));
+          temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+        }
+        else
+        {
+          deltaFF = (TempInvDiffeoLoc->G(j,x+2,y,z) - TempInvDiffeoLoc->G(j,x+1,y,z));        
+          temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+        }
+        /// Computation on the second dimension of the scheme.
+        eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(1,x,y,z);
+        if (abs(eta)>maxEta){maxEta = abs(eta);}
+        deltaB = (TempInvDiffeoLoc->G(j,x,y,z) - TempInvDiffeoLoc->G(j,x,y-1,z));
+        deltaF = (TempInvDiffeoLoc->G(j,x,y+1,z) - TempInvDiffeoLoc->G(j,x,y,z));
+        if (eta>=0.0)
+        {
+          deltaBB = (TempInvDiffeoLoc->G(j,x,y-1,z) - TempInvDiffeoLoc->G(j,x,y-2,z));
+          temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+        }
+        else
+        {
+          deltaFF = (TempInvDiffeoLoc->G(j,x,y+2,z) - TempInvDiffeoLoc->G(j,x,y+1,z));        
+          temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+        }
+        Output1->P(temp,j,x,y,z,t1);
+      }
+    }
+  }
+  for (j=0;j<3;j++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+  {
+    Output2->P(this->DeltaTimeSubdiv*this->VelocityField.G(j,this->TempDiffeo.G(0,x,y,z),this->DeltaTimeSubdiv*this->TempDiffeo.G(1,x,y,z),this->DeltaTimeSubdiv*this->TempDiffeo.G(2,x,y,z)),j,x,y,z,t2);  
+  }
+  if (maxEta>1){ cout << " CFL condition not respected  :   " << maxEta <<" > 1" <<"\n"; }
+}
+
+/// Runge Kutta scheme
+void EulerianShooting::RungeKutta(void)
+{
+  this->SchemeStep(&this->TempInvDiffeo,&this->TempDiffeo,&this->TempInvDiffeoLocalTable[0],&this->TempDiffeoLocalTable[0]);
+  SumVectorField(&this->TempInvDiffeo,&this->TempInvDiffeoLocalTable[0],&this->TempInvDiffeoLocalTable[1]);
+  SumVectorField(&this->TempDiffeo,&this->TempDiffeoLocalTable[0],&this->TempDiffeoLocalTable[1]);
+
+  this->SchemeStep(&this->TempInvDiffeoLocalTable[1],&this->TempDiffeoLocalTable[1],&this->TempInvDiffeoLocalTable[2],&this->TempDiffeoLocalTable[2]);
+  SumVectorField(&this->TempInvDiffeo,&this->TempInvDiffeoLocalTable[1],&this->TempInvDiffeoLocalTable[3],0,0,0,0.75,0.25);
+  SumVectorField(&this->TempDiffeo,&this->TempDiffeoLocalTable[1],&this->TempDiffeoLocalTable[3],0,0,0,0.75,0.25);
+  AddVectorField(&this->TempInvDiffeoLocalTable[2],&this->TempInvDiffeoLocalTable[3],0.25);
+  AddVectorField(&this->TempDiffeoLocalTable[2],&this->TempDiffeoLocalTable[3],0.25);
+
+  this->SchemeStep(&this->TempInvDiffeoLocalTable[3],&this->TempDiffeoLocalTable[3],&this->TempInvDiffeoLocalTable[0],&this->TempDiffeoLocalTable[0]);
+  SumVectorField(&this->TempInvDiffeo,&this->TempInvDiffeoLocalTable[3],&this->TempInvDiffeoLocalTable[4],0,0,0,1.0/3.0,2.0/3.0);
+  SumVectorField(&this->TempDiffeo,&this->TempDiffeoLocalTable[3],&this->TempDiffeoLocalTable[4],0,0,0,1.0/3.0,2.0/3.0);
+  SumVectorField(&this->TempInvDiffeoLocalTable[4],&this->TempInvDiffeoLocalTable[0],&this->TempInvDiffeo,0,0,0,1.0,2.0/3.0);
+  SumVectorField(&this->TempDiffeoLocalTable[4],&this->TempDiffeoLocalTable[0],&this->TempDiffeo,0,0,0,1.0,2.0/3.0);
+}
+
+/// Computes the velocity field and requires NablaI and Momentum computed
+void EulerianShooting::ComputeVelocityField(void)
+{
+  float temp;
+  int i,x,y,z;
+  for (i=0;i<3;i++)
+  {
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      temp = - this->Momentum.G(x,y,z) * this->NablaI.G(i,x,y,z);
+      this->FFTconvolver.P(static_cast<float>(temp),x,y,z);
+    }
+    FFTconvolver.Convolution();
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      this->VelocityField.P(FFTconvolver.G(x,y,z),i,x,y,z);
+    }
+  }
+}
+
+/// Compute the velocity field with arguments
+void EulerianShooting::ComputeVelocityField(ScalarField *Momentum,VectorField * NablaI)
+{  
+  float temp;
+  int i,x,y,z;
+  for (i=0;i<3;i++)
+  {
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      temp = - Momentum->G(x,y,z) * NablaI->G(i,x,y,z);
+      this->FFTconvolver.P(static_cast<float>(temp),x,y,z);
+    }
+    FFTconvolver.Convolution();
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      this->VelocityField.P(FFTconvolver.G(x,y,z),i,x,y,z);
+    }
+  }
+}
+
+/// Update NablaAdM and compute the adjoint vector field 
+void EulerianShooting::ComputeAdjointVectorField(void)
+{
+  Cpt_Grad_ScalarField(&this->AdjointMomentum,&this->NablaAdM,0,this->DeltaX);
+  float temp;
+  int i,x,y,z;
+  for (i=0;i<3;i++)
+  {
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      temp =  this->Momentum.G(x,y,z) * this->NablaAdM.G(i,x,y,z) - this->AdjointImage.G(x,y,z) * this->NablaI.G(i,x,y,z);
+      this->FFTconvolver.P(static_cast<float>(temp),x,y,z);
+    }
+    FFTconvolver.Convolution();
+    for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      this->AdjointVectorField.P(FFTconvolver.G(x,y,z),i,x,y,z);
+    }
+  }
+}
+
+/// Implementation of SuperBee Limiter
+float EulerianShooting::SuperBeeLimiter(float a, float b)
+{
+  float temp1,temp2,result;
+  temp1 = MinModLimiter(a,2*b);
+  temp2 = MinModLimiter(2*a,b);
+  if (a<b){result=b;}
+  else {result=a;}
+  return result;
+}
+
+/// Run the shooting from an initial Momentum and compute the gradient of the energy of the velocity field w.r.t the initial momentum
+void EulerianShooting::Shooting(void)
+{   
+  this->InitializeVariables();
+  this->Cost=0.0;
+  this->Energy =0.0;
+  int k;
+  this->Scheme();  
+  /// Compute the gradient of the norm w.r.t the initial momentum 
+  ScalarProduct(&this->NablaI,&this->VelocityField,&this->GradientMomentum,0,-this->alpha);
+  this->Energy += 0.5 * DotProduct(&this->GradientMomentum,&this->InitialMomentum);
+  cout << this->Energy << " Energy of the vector field "<<"\n";
+  DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,1);
+  DeepCopy(&this->TempDiffeo,&this->Diffeo,1);
+  for (k=1;k<this->NbTimeSubdivisions-1;k++)
+  {
+    this->Scheme();
+    DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+    DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+  }
+  TransportImage(&this->ImTemplate, &this->TempInvDiffeo, &this->Image);
+  ///add the similiraty measure to the cost 
+  this->Cost += this->SimilarityMeasure();
+  cout << this->Cost  << " Similarity Measure "<<"\n";
+  this->Cost += this->Energy;
+  cout << this->Cost  << " Global Cost "<<"\n";
+}
+
+/// Perform the gradient descent
+void EulerianShooting::GradientDescent(float gradientStep){  
+  float temp;
+  int localCounter = 0;
+  float optimizedCost = (this->ImTemplate.GetMaxAbsVal() + this->TransfoImTarget.GetMaxAbsVal());
+  optimizedCost*=(optimizedCost *this->ImTemplate.GetNbVoxels());
+  float currentCost = optimizedCost;
+  int i; 
+  
+  //MAIN LOOP
+  for (i=0;i<this->NbIterations;i++){
+    cout <<" "<<"\n";
+    cout <<"    Gradient Iteration Number "<<i+1<<"\n";
+    
+    //compute the gradient of initial momentum
+    this->Gradient();
+    
+    //if the global cost is decreasing
+    if (this->Cost<currentCost){
+      if (this->Cost < optimizedCost){
+        cout <<"Global Cost Decreasing "<<i+1<<"\n";
+        DeepCopy(&this->InitialMomentum,&this->OptimizedMomentum,0);
+        optimizedCost = this->Cost;
+        localCounter = 0;
+      }
+    }
+    
+    //if the global cost is increasing
+    if(this->Cost > currentCost){
+      cout <<"Global Cost Increasing "<<i+1<<"\n";
+      localCounter++;
+      if (localCounter==2){
+        gradientStep *= 0.8;
+        localCounter = 0;
+      }
+      cout << "  Local Counter " << localCounter << " and Gradient Step "<< gradientStep <<"\n";
+    }
+    
+    //update the initial momentum
+    currentCost = this->Cost;
+    Cpt_Grad_ScalarField(&this->ImTemplate,&this->NablaI,0,this->DeltaX);
+    this->ComputeVelocityField(&this->GradientMomentum,&this->NablaI);
+    this->MaxVectorField = this->VelocityField.GetMaxAbsVal();
+    //if(this->MaxVectorField>this->MaxUpdate){
+      temp = this->MaxUpdate/this->MaxVectorField;
+    //}
+    //else {temp=1.0;}
+    
+    AddScalarField(&this->GradientMomentum,&this->InitialMomentum,-temp*gradientStep);
+  }
+}
+
+/// Compute the gradient of the shooting w.r.t. the initial momentum and stores the result in GradientMomentum
+void EulerianShooting::Gradient(void)
+{
+  int k;
+  this->Shooting();
+  this->InitializeAdjointVariables();
+  TransportMomentum(&this->AdjointImage,&this->Diffeo,&this->TempAdImage,this->DeltaX,this->NbTimeSubdivisions-1);
+  for (k=this->NbTimeSubdivisions-1;k>0;k--)
+  {
+    TransportMomentum(&this->TempAdImage,&this->InvDiffeo,&this->AdjointImage,this->DeltaX,k);
+    TransportImage(&this->TempAdMomentum, &this->InvDiffeo, &this->AdjointMomentum,k);
+    TransportImage(&this->ImTemplate, &this->InvDiffeo, &this->Image,k);
+    Cpt_Grad_ScalarField(&this->Image,&this->NablaI,0,this->DeltaX);
+    TransportMomentum(&this->InitialMomentum,&this->InvDiffeo,&this->Momentum,this->DeltaX,k);
+    this->ComputeAdjointVectorField();
+    
+    // Compute the increment for TempAdImage
+    Product(&this->Momentum,&this->AdjointVectorField,&this->TempVectorField);
+    Cpt_Grad_Scal_VectorField(&this->TempVectorField,&this->TempScalarField,0,this->DeltaX);
+    TransportMomentum(&this->TempScalarField,&this->Diffeo,&this->TempScalarField3,this->DeltaX,k);
+    AddScalarField(&this->TempScalarField3,&this->TempAdImage,this->DeltaTimeSubdiv);
+
+    // Compute the increment for TempAdMomentum
+    ScalarProduct(&this->NablaI,&this->AdjointVectorField,&this->TempScalarField);
+    AddTransportImage(&this->TempScalarField,&this->Diffeo,&this->TempAdMomentum,-this->DeltaTimeSubdiv,k);
+  }
+  AddScalarField(&this->TempAdMomentum,&this->GradientMomentum,-1.0);
+}
+
+/// Initialize the adjoint variables to do when computing the gradient
+void EulerianShooting::InitializeAdjointVariables(void)
+{
+  int x,y,z;
+  for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+  {
+    this->AdjointImage.P(this->TransfoImTarget.G(x,y,z) - this->Image.G(x,y,z),x,y,z);
+    this->TempAdMomentum.P(0.0,x,y,z);
+  }
+}
+
+/// Initialize the temporary diffeomorphisms for the shooting
+void EulerianShooting::InitializeVariables(void)
+{
+  int x,y,z;
+  for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+  {
+    TempInvDiffeo.P(static_cast<float>(x),0,x,y,z,0);
+    TempDiffeo.P(static_cast<float>(x),0,x,y,z,0);
+    TempInvDiffeo.P(static_cast<float>(y),1,x,y,z,0);
+    TempDiffeo.P(static_cast<float>(y),1,x,y,z,0);
+    TempInvDiffeo.P(static_cast<float>(z),2,x,y,z,0);
+    TempDiffeo.P(static_cast<float>(z),2,x,y,z,0);
+  }
+}
+
+/// Choice of the scheme !!!!!  TO BE MODIFIED
+void EulerianShooting::Scheme(void)
+{  
+  if (this->indicatorRungeKutta==1) {  this->RungeKutta(); }
+  else { this->SchemeStep(); }
+}
+
+/// Compute the sum of square of the difference (can be replaced with CalcSqrtSumOfSquaredDif )
+float EulerianShooting::SimilarityMeasure()
+{
+  float result = 0.0;
+  int x,y,z;
+  for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+  {
+    result += pow((double)(this->Image.G(x,y,z) - this->TransfoImTarget.G(x,y,z)),2);
+  }
+  return 0.5*result;
+}
+
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///  FUNTIONS TO SAVE RESULTS
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+/// Save the results
+void EulerianShooting::SaveResult(void)
+{
+  //save the initial momentum in a nifti file
+  this->SaveInitialMomentum();
+  
+  if ((this->OutDispField==1)||(this->OutDispFieldEvo==1)) this->ComputeDiffeoToSave();
+  
+  //save the displacement field (in mm)
+  if (this->OutDispField==1) this->SaveDispField();
+  
+  //save the evolution of displacement field (in mm) along the diffeomorphism
+  if (this->OutDispFieldEvo==1) this->SaveTimeDepDispField();
+  
+  //save the correponding velocity vector field
+  if (this->OutVeloField==1) this->SaveVelocityField(); 
+  
+  // Save the distance squared and the SSD
+  if (this->OutDistEnSim==1) this->SaveEnergyAndSSD();
+  
+  // Save the difference between the template and the deformed target
+  if (this->OutDiff_Tpl_DefTrg==1) this->Save_Diff_Tpl_DefTrg();
+  
+  //save the (whole deformation + evolution of the momentum) and/or (the deformed template image)
+  if ((OutFinalDef==1)||(OutDeformation==1)) this->ShootingShow();  
+  
+}
+
+///Save the velocity field
+void EulerianShooting::SaveEnergyAndSSD(void)
+{
+  char FileName[256];
+  strcpy(FileName,this->PrefixOutputs);
+  strcat(FileName,"_Distance.txt");
+  cout <<FileName<<"\n";
+  ofstream MyFile(FileName, ios::out);
+  MyFile << "Energy: " << this->Energy << " -- Similarity Measure: " << this->Cost - this->Energy << endl;
+  MyFile.close();
+}
+
+///Save the velocity field
+void EulerianShooting::SaveVelocityField(void)
+{
+  char Output_Initial_VectorFieldX[256];
+  char Output_Initial_VectorFieldY[256];
+  char Output_Initial_VectorFieldZ[256];
+
+  strcpy(Output_Initial_VectorFieldX,this->PrefixOutputs);
+  strcat(Output_Initial_VectorFieldX,"_Initial_VectorFieldX.nii");
+  strcpy(Output_Initial_VectorFieldY,this->PrefixOutputs);
+  strcat(Output_Initial_VectorFieldY,"_Initial_VectorFieldY.nii");
+  strcpy(Output_Initial_VectorFieldZ,this->PrefixOutputs);
+  strcat(Output_Initial_VectorFieldZ,"_Initial_VectorFieldZ.nii");
+  
+  Cpt_Grad_ScalarField(&this->ImTemplate,&this->NablaI,0,this->DeltaX);
+  this->ComputeVelocityField(&this->InitialMomentum,&this->NablaI);
+  
+  this->VelocityField.Write(Output_Initial_VectorFieldX,Output_Initial_VectorFieldY,Output_Initial_VectorFieldZ,this->TargetImageName);
+}
+
+
+
+
+///
+void EulerianShooting::ComputeDiffeoToSave(void)
+{
+  int k;
+  
+  //initialisation
+  this->InitializeVariables();
+  
+  //compute the deformations
+  Cpt_Grad_ScalarField(&this->ImTemplate,&this->NablaI,0,this->DeltaX);
+  this->ComputeVelocityField(&this->InitialMomentum,&this->NablaI);
+  
+  for (k=0;k<this->NbTimeSubdivisions-1;k++)
+  {
+    this->Scheme();
+    TransportMomentum(&this->InitialMomentum, &this->TempInvDiffeo, &this->Momentum, this->DeltaX);
+    TransportImage(&this->ImTemplate, &this->TempInvDiffeo, &this->Image);
+    Cpt_Grad_ScalarField(&this->Image,&this->NablaI,0,this->DeltaX);
+    ComputeVelocityField();
+    DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+    DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+  }
+}
+
+
+///Save the displacement field
+void EulerianShooting::SaveDispField(void)
+{
+  char Output_DispField_Trg2Tpl_X[256];
+  char Output_DispField_Trg2Tpl_Y[256];
+  char Output_DispField_Trg2Tpl_Z[256];
+  VectorField LocDisplacementField;
+  float tempQuat[4][4];
+  float ImageD_Target2Template[4][4];
+  float trgX,trgY,trgZ;
+  float srcX,srcY,srcZ;
+  float locX,locY,locZ;
+  float locX2,locY2,locZ2;
+  int x,y,z;
+  
+  
+  
+  // init
+  strcpy(Output_DispField_Trg2Tpl_X,this->PrefixOutputs);
+  strcat(Output_DispField_Trg2Tpl_X,"_DispField_Trg2Tpl_X.nii");
+  strcpy(Output_DispField_Trg2Tpl_Y,this->PrefixOutputs);
+  strcat(Output_DispField_Trg2Tpl_Y,"_DispField_Trg2Tpl_Y.nii");
+  strcpy(Output_DispField_Trg2Tpl_Z,this->PrefixOutputs);
+  strcat(Output_DispField_Trg2Tpl_Z,"_DispField_Trg2Tpl_Z.nii");
+  
+  LocDisplacementField.CreateVoidField(this->ImTarget.NX,this->ImTarget.NY,this->ImTarget.NZ);
+  
+  mult_quat4t4mat_quat4t4mat(ImTemplate.World2Image,this->World_Target2Template,tempQuat);
+  mult_quat4t4mat_quat4t4mat(tempQuat,this->ImTarget.Image2World,ImageD_Target2Template);
+  
+  //compute the displacement field
+  for (z = 0; z < LocDisplacementField.NZ; z++)  for (y = 0; y < LocDisplacementField.NY; y++) for (x = 0; x < LocDisplacementField.NX; x++){
+    trgX=x*this->ImTarget.Image2World[0][0]+y*this->ImTarget.Image2World[0][1]+z*this->ImTarget.Image2World[0][2]+this->ImTarget.Image2World[0][3];
+    trgY=x*this->ImTarget.Image2World[1][0]+y*this->ImTarget.Image2World[1][1]+z*this->ImTarget.Image2World[1][2]+this->ImTarget.Image2World[1][3];
+    trgZ=x*this->ImTarget.Image2World[2][0]+y*this->ImTarget.Image2World[2][1]+z*this->ImTarget.Image2World[2][2]+this->ImTarget.Image2World[2][3];
+    
+    
+    locX=x*ImageD_Target2Template[0][0]+y*ImageD_Target2Template[0][1]+z*ImageD_Target2Template[0][2]+ImageD_Target2Template[0][3];
+    locY=x*ImageD_Target2Template[1][0]+y*ImageD_Target2Template[1][1]+z*ImageD_Target2Template[1][2]+ImageD_Target2Template[1][3];
+    locZ=x*ImageD_Target2Template[2][0]+y*ImageD_Target2Template[2][1]+z*ImageD_Target2Template[2][2]+ImageD_Target2Template[2][3];
+    
+    locX2=this->InvDiffeo.G(0,locX,locY,locZ,this->NbTimeSubdivisions-1);
+    locY2=this->InvDiffeo.G(1,locX,locY,locZ,this->NbTimeSubdivisions-1);
+    locZ2=this->InvDiffeo.G(2,locX,locY,locZ,this->NbTimeSubdivisions-1);
+
+    srcX=locX2*this->ImTemplate.Image2World[0][0]+locY2*this->ImTemplate.Image2World[0][1]+locZ2*this->ImTemplate.Image2World[0][2]+this->ImTemplate.Image2World[0][3];
+    srcY=locX2*this->ImTemplate.Image2World[1][0]+locY2*this->ImTemplate.Image2World[1][1]+locZ2*this->ImTemplate.Image2World[1][2]+this->ImTemplate.Image2World[1][3];
+    srcZ=locX2*this->ImTemplate.Image2World[2][0]+locY2*this->ImTemplate.Image2World[2][1]+locZ2*this->ImTemplate.Image2World[2][2]+this->ImTemplate.Image2World[2][3];
+    
+    LocDisplacementField.P(srcX-trgX,0,x,y,z);
+    LocDisplacementField.P(srcY-trgY,1,x,y,z);
+    LocDisplacementField.P(srcZ-trgZ,2,x,y,z);
+  }
+  
+  //save the displacement field
+  LocDisplacementField.Write(Output_DispField_Trg2Tpl_X,Output_DispField_Trg2Tpl_Y,Output_DispField_Trg2Tpl_Z,this->TargetImageName);
+  }
+
+///Save the displacement field
+void EulerianShooting::SaveTimeDepDispField(void)
+{
+  char Output_DispField_Trg2Tpl_X[256];
+  char Output_DispField_Trg2Tpl_Y[256];
+  char Output_DispField_Trg2Tpl_Z[256];
+  VectorField LocDisplacementField;
+  float tempQuat[4][4];
+  float ImageD_Target2Template[4][4];
+  float trgX,trgY,trgZ;
+  float srcX,srcY,srcZ;
+  float locX,locY,locZ;
+  float locX2,locY2,locZ2;
+  int x,y,z;
+  int timeSubdivision;
+  
+  // init
+  strcpy(Output_DispField_Trg2Tpl_X,this->PrefixOutputs);
+  strcat(Output_DispField_Trg2Tpl_X,"_TimeDep_DispField_Trg2Tpl_X.nii");
+  strcpy(Output_DispField_Trg2Tpl_Y,this->PrefixOutputs);
+  strcat(Output_DispField_Trg2Tpl_Y,"_TimeDep_DispField_Trg2Tpl_Y.nii");
+  strcpy(Output_DispField_Trg2Tpl_Z,this->PrefixOutputs);
+  strcat(Output_DispField_Trg2Tpl_Z,"_TimeDep_DispField_Trg2Tpl_Z.nii");
+  
+  LocDisplacementField.CreateVoidField(this->ImTarget.NX,this->ImTarget.NY,this->ImTarget.NZ,this->NbTimeSubdivisions);
+  
+  mult_quat4t4mat_quat4t4mat(ImTemplate.World2Image,this->World_Target2Template,tempQuat);
+  mult_quat4t4mat_quat4t4mat(tempQuat,this->ImTarget.Image2World,ImageD_Target2Template);
+  
+  //compute the displacement field
+  for (timeSubdivision=0;timeSubdivision<this->NbTimeSubdivisions;timeSubdivision++){
+    for (z = 0; z < LocDisplacementField.NZ; z++)  for (y = 0; y < LocDisplacementField.NY; y++) for (x = 0; x < LocDisplacementField.NX; x++){
+      trgX=x*this->ImTarget.Image2World[0][0]+y*this->ImTarget.Image2World[0][1]+z*this->ImTarget.Image2World[0][2]+this->ImTarget.Image2World[0][3];
+      trgY=x*this->ImTarget.Image2World[1][0]+y*this->ImTarget.Image2World[1][1]+z*this->ImTarget.Image2World[1][2]+this->ImTarget.Image2World[1][3];
+      trgZ=x*this->ImTarget.Image2World[2][0]+y*this->ImTarget.Image2World[2][1]+z*this->ImTarget.Image2World[2][2]+this->ImTarget.Image2World[2][3];
+      
+      
+      locX=x*ImageD_Target2Template[0][0]+y*ImageD_Target2Template[0][1]+z*ImageD_Target2Template[0][2]+ImageD_Target2Template[0][3];
+      locY=x*ImageD_Target2Template[1][0]+y*ImageD_Target2Template[1][1]+z*ImageD_Target2Template[1][2]+ImageD_Target2Template[1][3];
+      locZ=x*ImageD_Target2Template[2][0]+y*ImageD_Target2Template[2][1]+z*ImageD_Target2Template[2][2]+ImageD_Target2Template[2][3];
+      
+      locX2=this->InvDiffeo.G(0,locX,locY,locZ,timeSubdivision);
+      locY2=this->InvDiffeo.G(1,locX,locY,locZ,timeSubdivision);
+      locZ2=this->InvDiffeo.G(2,locX,locY,locZ,timeSubdivision);
+      
+      srcX=locX2*this->ImTemplate.Image2World[0][0]+locY2*this->ImTemplate.Image2World[0][1]+locZ2*this->ImTemplate.Image2World[0][2]+this->ImTemplate.Image2World[0][3];
+      srcY=locX2*this->ImTemplate.Image2World[1][0]+locY2*this->ImTemplate.Image2World[1][1]+locZ2*this->ImTemplate.Image2World[1][2]+this->ImTemplate.Image2World[1][3];
+      srcZ=locX2*this->ImTemplate.Image2World[2][0]+locY2*this->ImTemplate.Image2World[2][1]+locZ2*this->ImTemplate.Image2World[2][2]+this->ImTemplate.Image2World[2][3];
+      
+      LocDisplacementField.P(srcX-trgX,0,x,y,z,timeSubdivision);
+      LocDisplacementField.P(srcY-trgY,1,x,y,z,timeSubdivision);
+      LocDisplacementField.P(srcZ-trgZ,2,x,y,z,timeSubdivision);
+    }
+  }
+  
+  //save the displacement field
+  LocDisplacementField.Write(Output_DispField_Trg2Tpl_X,Output_DispField_Trg2Tpl_Y,Output_DispField_Trg2Tpl_Z,this->TargetImageName);
+}
+
+
+
+///Save the initial momentum
+void EulerianShooting::SaveInitialMomentum(void)
+{
+  char Output_Momentum[256];
+  strcpy(Output_Momentum,this->PrefixOutputs);
+  strcat(Output_Momentum,"_InitMomentum.nii");
+  this->InitialMomentum.Write(Output_Momentum,this->SourceImageName);
+}
+
+
+
+
+///save the difference between the template and the deformed target
+void EulerianShooting::Save_Diff_Tpl_DefTrg(void)
+{
+  char Output_Diff[256];
+  int k,x,y,z;
+  ScalarField OutputImage;
+  
+  
+  //initialisation
+  this->InitializeVariables();
+  OutputImage.Read(this->SourceImageName);
+  
+  
+  //compute the deformations
+  Cpt_Grad_ScalarField(&this->ImTemplate,&this->NablaI,0,this->DeltaX);
+  this->ComputeVelocityField(&this->InitialMomentum,&this->NablaI);
+  
+  for (k=0;k<this->NbTimeSubdivisions-1;k++)
+  {
+  this->Scheme();
+    TransportMomentum(&this->InitialMomentum, &this->TempInvDiffeo, &this->Momentum, this->DeltaX);
+    TransportImage(&this->ImTemplate, &this->TempInvDiffeo, &this->Image);
+    Cpt_Grad_ScalarField(&this->Image,&this->NablaI,0,this->DeltaX);
+    ComputeVelocityField();
+    DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+    DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+  }
+  
+  TransportImage(&this->TransfoImTarget, &this->TempDiffeo, &OutputImage);
+  
+  for(z=0;z<ImTemplate.NZ;z++) for(y=0;y<ImTemplate.NY;y++) for(x=0;x<ImTemplate.NX;x++){
+    OutputImage.P(ImTemplate.G(x,y,z)-OutputImage.G(x,y,z),x,y,z);
+  }
+  
+  
+  strcpy(Output_Diff,this->PrefixOutputs);
+  strcat(Output_Diff,"_Diff_Tpl_DefTrg.nii");
+  OutputImage.Write(Output_Diff);
+  
+}
+
+
+
+
+///save the temporal evolution of the template image and the initial momentum
+void EulerianShooting::ShootingShow(void)
+{
+  char FileName[256];
+  char FileName4[256];
+  char FileName5[256];
+  int k;
+  ScalarField OutputImage;
+  ScalarField FinalOutputImage;
+  ScalarField OutputMomentum;
+  
+  
+  //initialisation
+  this->InitializeVariables();
+  OutputImage.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdivisions);
+  FinalOutputImage.CreateVoidField(this->NX,this->NY,this->NZ,1);
+  OutputMomentum.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdivisions);
+  
+  DeepCopy(&this->ImTemplate,&OutputImage,0);
+  DeepCopy(&this->InitialMomentum,&OutputMomentum,0);
+  
+  //compute the deformations
+  Cpt_Grad_ScalarField(&this->ImTemplate,&this->NablaI,0,this->DeltaX);
+  this->ComputeVelocityField(&this->InitialMomentum,&this->NablaI);
+  
+  for (k=0;k<this->NbTimeSubdivisions-1;k++)
+  {
+    this->Scheme();
+    TransportMomentum(&this->InitialMomentum, &this->TempInvDiffeo, &this->Momentum, this->DeltaX);
+    TransportImage(&this->ImTemplate, &this->TempInvDiffeo, &this->Image);
+    Cpt_Grad_ScalarField(&this->Image,&this->NablaI,0,this->DeltaX);
+    ComputeVelocityField();
+    DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+    DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+    DeepCopy(&this->Momentum,&OutputMomentum,k+1);
+    DeepCopy(&this->Image,&OutputImage,k+1);
+    if (k==this->NbTimeSubdivisions-2) DeepCopy(&this->Image,&FinalOutputImage,0);
+  }
+  
+  //save the deformations
+  if (OutFinalDef==1){
+    strcpy(FileName5,this->PrefixOutputs);
+    strcat(FileName5,"_FinalDefSrc.nii");
+    FinalOutputImage.Write(FileName5,this->SourceImageName);
+  }
+  
+  if (OutDeformation==1){
+    strcpy(FileName,this->PrefixOutputs);
+    strcpy(FileName4,this->PrefixOutputs);
+    strcat(FileName,"_Deformation.nii");
+    strcat(FileName4,"_MomentumEvolution.nii");
+    OutputImage.Write(FileName,this->SourceImageName);
+    OutputMomentum.Write(FileName4,this->SourceImageName);
+  }
+}
+
+
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///  MAIN FUNCTION
+/// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+/// Run the registration
+void EulerianShooting::Run(void)
+{
+  this->ReadAndTreatInputImages();
+  this->AllocateVariablesShooting();
+  this->GradientDescent(0.5);
+  this->SaveResult();
+}
+

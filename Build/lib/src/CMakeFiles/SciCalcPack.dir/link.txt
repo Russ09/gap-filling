@@ -1,0 +1,2 @@
+/usr/bin/ar cr libSciCalcPack.a  CMakeFiles/SciCalcPack.dir/SciCalcPack.cc.o
+/usr/bin/ranlib libSciCalcPack.a

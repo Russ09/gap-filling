@@ -1,0 +1,1 @@
+/usr/bin/c++    -fopenmp    CMakeFiles/CurvesAna.dir/applications/CurvesAna.cc.o  -o CurvesAna -rdynamic lib/src/libSciCalcPack.a 

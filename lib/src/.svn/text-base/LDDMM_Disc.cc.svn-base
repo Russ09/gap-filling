@@ -1,0 +1,1117 @@
+/*=========================================================================
+ 
+ Date      : $Date: 29.04.2010$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#include <LDDMM_Disc.h>
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                   CONSTRUCTOR AND DESTRUCTOR
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+LDDMM_Disc::LDDMM_Disc(void){
+	int i;
+  
+	//default parameters
+	epsilon=0.2;
+	LambaX=1;
+	//alpha=1;
+	iteration_nb=10;
+	NbTimeSubdiv=10;
+	MaxVelocityUpdate=0.49;  //rem: Delta Voxels = 1
+  sigma_diffusion=0;
+  sigma_fluid=3;
+	Margin=0;
+	WghtVelField=0.000001; //previously 1
+	RefMaxGrad=-1.;
+	GreyLevAlign=0;
+	GLA_Padding_Src=-1.;
+	GLA_Padding_Trg=-1.;
+	FlowLength=0;
+	DetJacobian=0;
+	FinalDefVec=0;
+	ShowSSD=0;
+	strcpy(PrefixInputs,"Null");
+	strcpy(PrefixOutputs,"Outputs");
+	strcpy(MaskFile,"Null");
+  ExcluReg=-1234.5;
+  MaskFileIndicator=0;
+	strcpy(SourceFile,"Null");
+	strcpy(TargetFile,"Null");
+	MeasureTypicAmp=0;
+  World_Target2Template[0][0]=1; World_Target2Template[0][1]=0;   World_Target2Template[0][2]=0;    World_Target2Template[0][3]=0;   
+  World_Target2Template[1][0]=0; World_Target2Template[1][1]=1;   World_Target2Template[1][2]=0;    World_Target2Template[1][3]=0;   
+  World_Target2Template[2][0]=0; World_Target2Template[2][1]=0;   World_Target2Template[2][2]=1;    World_Target2Template[2][3]=0;   
+  World_Target2Template[3][0]=0; World_Target2Template[3][1]=0;   World_Target2Template[3][2]=0;    World_Target2Template[3][3]=1; 
+  x_mm=1;
+  y_mm=1;
+  y_mm=1;
+  ExtendTrgImag_LowerX=0;
+  ExtendTrgImag_UpperX=0;
+  ExtendTrgImag_LowerY=0;
+  ExtendTrgImag_UpperY=0;
+  ExtendTrgImag_LowerZ=0;
+  ExtendTrgImag_UpperZ=0;
+  UnderSampleTrgFactor=1;
+  strcpy(IniDispFieldX,"Null");
+  strcpy(IniDispFieldY,"Null");
+  strcpy(IniDispFieldZ,"Null");
+  IniDispFieldDefined=0;
+  InterRegionMargin=10; //nb of mm around the regions boundaries where the update velocity fields are reduced
+  BoundaryCompensation=1;
+}
+
+LDDMM_Disc::~LDDMM_Disc(void){}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                        SUB-FUNCTIONS TO PERFORM THE REGISTRATION
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///initiate the gradient descent
+void LDDMM_Disc::ReadAndTreatInputImages(void){
+	int x, y, z;
+	int DistClosestEdge;
+	int i,j;
+	double mean1,mean2,std1,std2;
+	float tempQuat[4][4];
+  ScalarField TempImTarget;
+	char FileTreatedTarget[256];
+  char DotNii[256];
+  
+  
+
+	
+	//2) READ INPUTS
+  //2.1) read source file
+	ImTemplate.Read(this->SourceFile);
+
+  //2.2) read and eventually pre-treat the target file
+
+  if ((fabs(this->UnderSampleTrgFactor-1)<=0.01)&&(ExtendTrgImag_LowerX<=0)&&(ExtendTrgImag_UpperX<=0)&&(ExtendTrgImag_LowerY<=0)&&(ExtendTrgImag_UpperY<=0)&&(ExtendTrgImag_LowerZ<=0)&&(ExtendTrgImag_UpperZ<=0)){
+    ImTarget.Read(this->TargetFile);
+  }
+  else{ // there is at leat a special treatment to do with the target image
+    
+    //name of the treated target file
+    strcpy(FileTreatedTarget,"tmp_");
+    strcpy(DotNii,".nii");
+    
+    strcat(FileTreatedTarget,this->PrefixOutputs);
+    strcat(FileTreatedTarget,DotNii);
+    
+    cout << FileTreatedTarget << " is " << this->TargetFile << " after treatments (resampling and/or expansion)" << endl;
+    
+    
+    //expend the image
+    if (!((ExtendTrgImag_LowerX<=0)&&(ExtendTrgImag_UpperX<=0)&&(ExtendTrgImag_LowerY<=0)&&(ExtendTrgImag_UpperY<=0)&&(ExtendTrgImag_LowerZ<=0)&&(ExtendTrgImag_UpperZ<=0))){
+      TempImTarget.ReadAndExpend(this->TargetFile,ExtendTrgImag_LowerX,ExtendTrgImag_UpperX,ExtendTrgImag_LowerY,ExtendTrgImag_UpperY,ExtendTrgImag_LowerZ,ExtendTrgImag_UpperZ);
+      TempImTarget.Write(FileTreatedTarget);
+      
+      strcpy(this->TargetFile,FileTreatedTarget);  // a bit dirty but useful as the results are saved in the target coordinate space
+      if (fabs(this->UnderSampleTrgFactor-1)<=0.01) ImTarget.Read(this->TargetFile);
+    }
+    
+    //undersample the image
+    if (fabs(this->UnderSampleTrgFactor-1)>0.01){
+      TempImTarget.Read_and_Undersample(this->TargetFile,this->UnderSampleTrgFactor);
+      TempImTarget.Write(FileTreatedTarget);
+      
+      strcpy(this->TargetFile,FileTreatedTarget);  // a bit dirty but useful as the results are saved in the target coordinate space
+      ImTarget.Read(this->TargetFile);
+    }
+  }
+  
+  cout << "Source image = " << this->SourceFile << " / Target image = " << this->TargetFile << endl;
+   
+	//2.2) check whether  3D or 2D images are opened
+	if (ImTemplate.NT>1) cout << "Source image " << i << " depends on time!!!" << endl;
+	if (ImTarget.NT>1) cout << "Target image " << i << " depends on time!!!" << endl;
+		
+	
+	//2.3) variables containing the size of the image
+	this->NX=ImTarget.NX;
+	this->NY=ImTarget.NY;
+	this->NZ=ImTarget.NZ;
+	this->NT=1;
+	
+  cout << "Image size: " << this->NX <<  "*"  <<  this->NY  <<  "*"  << this->NZ  << " (source: " << this->ImTemplate.NX <<  "*"  <<  this->ImTemplate.NY  <<  "*"  << this->ImTemplate.NZ  << ")\n";
+
+
+  //2.4) compute the quaternion to convert target coordinates into template coordinates
+  mult_quat4t4mat_quat4t4mat(World_Target2Template,ImTarget.Image2World,tempQuat);
+  mult_quat4t4mat_quat4t4mat(ImTemplate.World2Image,tempQuat,Target2TemplateCoord);
+  
+  cout << endl;
+  cout << "Target to template:" << endl;
+  for (i=0;i<4;i++){
+    for (j=0;j<4;j++){
+      cout << Target2TemplateCoord[i][j] << " ";
+    }
+    cout << endl;
+  }
+  
+  //2.5) compute the voxels size in mm
+  this->x_mm=sqrt(ImTarget.Image2World[0][0]*ImTarget.Image2World[0][0]+ImTarget.Image2World[0][1]*ImTarget.Image2World[0][1]+ImTarget.Image2World[0][2]*ImTarget.Image2World[0][2]);
+  this->y_mm=sqrt(ImTarget.Image2World[1][0]*ImTarget.Image2World[1][0]+ImTarget.Image2World[1][1]*ImTarget.Image2World[1][1]+ImTarget.Image2World[1][2]*ImTarget.Image2World[1][2]);
+  this->z_mm=sqrt(ImTarget.Image2World[2][0]*ImTarget.Image2World[2][0]+ImTarget.Image2World[2][1]*ImTarget.Image2World[2][1]+ImTarget.Image2World[2][2]*ImTarget.Image2World[2][2]);
+  
+  cout << endl;
+  cout << "Target image resolution: " << this->x_mm << " "  << this->y_mm << " "  << this->z_mm << endl;
+  
+  
+  
+	//5) COMPUTE THE MAPPING (in from the target c.s. to the source c.s.)
+  float flX,flY,flZ;
+  float WTX,WTY,WTZ;
+  float WSX,WSY,WSZ;
+  float ISX,ISY,ISZ;
+  if (IniDispFieldDefined==1){
+    //read the mapping in the world coordinate system   (IniDispField:  points from target to source in millimeters)
+    this->IniDispField.Read_and_Interpolate(this->IniDispFieldX,this->IniDispFieldY,this->IniDispFieldZ,this->NX,this->NY,this->NZ,0);
+    
+    //convert the mapping in voxel coordonate system (points from target to source in voxels)
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    
+      flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+      
+      WTX=flX*ImTarget.Image2World[0][0]+flY*ImTarget.Image2World[0][1]+flZ*ImTarget.Image2World[0][2]+ImTarget.Image2World[0][3];
+      WTY=flX*ImTarget.Image2World[1][0]+flY*ImTarget.Image2World[1][1]+flZ*ImTarget.Image2World[1][2]+ImTarget.Image2World[1][3];
+      WTZ=flX*ImTarget.Image2World[2][0]+flY*ImTarget.Image2World[2][1]+flZ*ImTarget.Image2World[2][2]+ImTarget.Image2World[2][3];
+      
+      WSX=WTX+this->IniDispField.G(0,x,y,z);
+      WSY=WTY+this->IniDispField.G(1,x,y,z);
+      WSZ=WTZ+this->IniDispField.G(2,x,y,z);
+ 
+      ISX=WSX*ImTemplate.World2Image[0][0]+WSY*ImTemplate.World2Image[0][1]+WSZ*ImTemplate.World2Image[0][2]+ImTemplate.World2Image[0][3];
+      ISY=WSX*ImTemplate.World2Image[1][0]+WSY*ImTemplate.World2Image[1][1]+WSZ*ImTemplate.World2Image[1][2]+ImTemplate.World2Image[1][3];
+      ISZ=WSX*ImTemplate.World2Image[2][0]+WSY*ImTemplate.World2Image[2][1]+WSZ*ImTemplate.World2Image[2][2]+ImTemplate.World2Image[2][3];
+      
+      this->IniDispField.P(ISX,0,x,y,z);
+      this->IniDispField.P(ISY,1,x,y,z);
+      this->IniDispField.P(ISZ,2,x,y,z);
+      
+    }
+    
+    //IniDispField.Write("IniDispFieldVoxX.nii","IniDispFieldVoxY.nii","IniDispFieldVoxZ.nii",this->TargetFile);
+    
+  }
+  
+  
+	//6) CREATE THE MASK
+  //read the mask
+  
+  if (strcmp(this->MaskFile,"Null")!=0){
+    this->Mask.Read(this->MaskFile);
+  }
+  else{
+    this->Mask.Read(this->SourceFile);
+    
+    for (z = 0; z < this->Mask.NZ; z++)  for (y = 0; y < this->Mask.NY; y++) for (x = 0; x < this->Mask.NX; x++)
+      this->Mask.P(1,x,y,z);
+  }
+  
+  if ((ImTemplate.NX!=this->Mask.NX)) cout << "The source image and the mask do not have the same size!!!";
+  if ((ImTemplate.NY!=this->Mask.NY)) cout << "The source image and the mask do not have the same size!!!";
+  if ((ImTemplate.NZ!=this->Mask.NZ)) cout << "The source image and the mask do not have the same size!!!";
+  
+  int TempIdInMask[10000];
+  for (i=0;i<10000;i++) TempIdInMask[i]=0;
+  
+  for (z = 0; z < this->Mask.NZ; z++)  for (y = 0; y < this->Mask.NY; y++) for (x = 0; x < this->Mask.NX; x++){
+    TempIdInMask[static_cast<int>(this->Mask.G(x,y,z)+0.00001)]=1;
+  }
+  
+  this->NbIdInMask=0;
+  for (i=0;i<10000;i++) 
+    if (TempIdInMask[i]==1)
+      this->NbIdInMask++;
+  
+  this->IdInMask=new float[this->NbIdInMask];
+  
+  this->NbIdInMask=0;
+  for (i=1;i<10000;i++) 
+    if (TempIdInMask[i]==1){
+      this->IdInMask[this->NbIdInMask]=static_cast<float>(i);
+      this->NbIdInMask++;
+      cout << "Region in the mask: " << i << "\n";
+    }
+  
+  if (fabs(ExcluReg+1234.5)>0.001){ //exclusive registration in one region
+    this->NbIdInMask=1;
+    this->IdInMask[0]=ExcluReg;
+  }
+  
+
+	
+	//7) LINEAR ALIGNMENT OF THE GREY LEVELS OF ImTarget ON THOSE OF ImTemplate
+	float PaddingValue;
+	int NbVoxelsOK;
+	PaddingValue=10;
+	
+	if (GreyLevAlign!=0){
+		//compute mean and std dev of the source and target images
+		mean1=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->ImTemplate.NZ; z++)  for (y = 0; y < this->ImTemplate.NY; y++) for (x = 0; x < this->ImTemplate.NX; x++) if (this->ImTemplate.G(x,y,z)>GLA_Padding_Src){
+			mean1+=(double)this->ImTemplate.G(x,y,z);
+			NbVoxelsOK++;
+		}
+		mean1/=(double)(NbVoxelsOK);
+		
+		mean2=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTarget.G(x,y,z)>GLA_Padding_Trg){
+			mean2+=(double)this->ImTarget.G(x,y,z);
+			NbVoxelsOK++;
+		}
+		mean2/=(double)(NbVoxelsOK);
+		
+		std1=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->ImTemplate.NZ; z++)  for (y = 0; y < this->ImTemplate.NY; y++) for (x = 0; x < this->ImTemplate.NX; x++) if (this->ImTemplate.G(x,y,z)>GLA_Padding_Src){
+			std1+=pow((double)this->ImTemplate.G(x,y,z)-mean1,2.);
+			NbVoxelsOK++;
+		}
+		std1/=(double)(NbVoxelsOK);
+		std1=sqrt(std1);
+		
+		std2=0.;
+		NbVoxelsOK=0;
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTarget.G(x,y,z)>GLA_Padding_Trg){
+			std2+=pow((double)this->ImTarget.G(x,y,z)-mean2,2.);
+			NbVoxelsOK++;
+		}
+		std2/=(double)(NbVoxelsOK);
+		std2=sqrt(std2);
+		
+		cout << "Template: mean=" << mean1 << ", stddev=" << std1 << ".    Target: mean=" << mean2 << ", stddev=" << std2 << "\n";
+		
+		
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+			this->ImTarget.P((this->ImTarget.G(x,y,z)-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1,x,y,z);
+		
+		
+		for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+			if ((this->ImTarget.G(x,y,z)<(GLA_Padding_Trg-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1)||(this->ImTarget.G(x,y,z)<GLA_Padding_Src))
+				this->ImTarget.P(0.,x,y,z);
+	}
+	
+	//this->ImTarget.Write("TrgNew.nii",this->TargetFile);
+	//this->ImTemplate.Write("SrcNew.nii",this->TemplateFiles[0]);
+	
+}
+
+
+///allocate all variables used for the gradient descent (Beg 2005) of the current 3D image from the treated 4D time sequence.
+///Compute also the dimension of the scalar and vector fields in use
+void LDDMM_Disc::AllocateAllVariables(void){
+	//time step between two subdivision
+	this->DeltaTimeSubdiv=1./(static_cast<float>(NbTimeSubdiv-1));
+	
+	//4) initiate the velocity field
+	//... velocity field
+	//    -->  VelocityField.G(0,x,y,z,i)= direction ex of the vector at (x,y,z)
+	//    -->  VelocityField.G(1,x,y,z,i)= direction ey of the vector at (x,y,z)
+	//    -->  VelocityField.G(2,x,y,z,i)= direction ez of the vector at (x,y,z)
+	//    -->  where n is the id of the velocity field
+	if (strcmp(PrefixInputs,"Null")!=0)
+		this->LoadVelocityFields(PrefixInputs);  //NbTimeSubdiv should be checked
+	else
+		this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+	
+	
+	//... forward mapping
+	//    -->  ForwardMapping.G(0,x,y,z) = coordinate x at the current time corresponding to (x,y,z) at time 0
+	//    -->  ForwardMapping.G(1,x,y,z) = coordinate y at the current time corresponding to (x,y,z) at time 0
+	//    -->  ForwardMapping.G(2,x,y,z) = coordinate z at the current time corresponding to (x,y,z) at time 0
+	this->ForwardMapping.CreateVoidField(this->NX,this->NY,this->NZ);  //only represents the mapping at the current time to save some memory
+	
+	//... backward mapping
+	//    -->  BackwardMapping.G(0,x,y,z,i) = coordinate x at time i corresponding to (x,y,z) at time 1
+	//    -->  BackwardMapping.G(1,x,y,z,i) = coordinate y at time i corresponding to (x,y,z) at time 1
+	//    -->  BackwardMapping.G(2,x,y,z,i) = coordinate z at time i corresponding to (x,y,z) at time 1
+	this->BackwardMapping.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+	
+	//... temporary image transformed using the forward mapping from time 0
+	//    -->  J0.G(x,y,z) = gray level of the transformed image J0 at (x,y,z)
+	this->J0.CreateVoidField(this->NX,this->NY,this->NZ);
+
+	//... temporary image transformed using the backward mapping from time 1
+	//    -->  J1.G(x,y,z) = gray level of the transformed image J1 at (x,y,z)
+	this->J1.CreateVoidField(this->NX,this->NY,this->NZ);
+	
+	//... gradient of J
+	//    -->  GradJ.G(0,x,y,z)= gradient of J0 in direction ex at (x,y,z)
+	//    -->  GradJ.G(1,x,y,z)= gradient of J0 in direction ey at (x,y,z)
+	//    -->  GradJ.G(2,x,y,z)= gradient of J0 in direction ez at (x,y,z)
+	this->GradJ.CreateVoidField(this->NX,this->NY,this->NZ);
+	
+	//... determinent of the Jacobians  
+	//    -->  Jacobians.G(x,y,z)= determinant of the jacobian at (x,y,z)
+	this->DetJacobians.CreateVoidField(this->NX,this->NY,this->NZ);
+	
+	//... Energy Gradient
+	//    -->  GradE.G(0,i,x,y,z) = Energy gradient at time i in direction ex at (x,y,z)
+	//    -->  GradE.G(1,i,x,y,z) = Energy gradient at time i in direction ey at (x,y,z)
+	//    -->  GradE.G(2,i,x,y,z) = Energy gradient at time i in direction ez at (x,y,z)
+	this->GradE.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+	
+  //... temporary 3D scalar field to perform the smoothings 
+  this->FieldToSmooth.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //... projected mask and distance to the boundary
+  if (this->MaskFileIndicator==1) this->ProjMask.CreateVoidField(this->NX,this->NY,this->NZ);
+  if (this->MaskFileIndicator==1) this->NearestBoundary.CreateVoidField(this->NX,this->NY,this->NZ);
+  if (this->MaskFileIndicator==1) this->TempSF.CreateVoidField(this->NX,this->NY,this->NZ);
+}
+
+
+
+///Compute the projected map 'ProjMask' / 'TempSF' / the distance map 'NearestBoundary' at the time step 'timeSubdiv'
+///Warning: put 'ForwardMapping' at time 'timeSubdiv'
+void LDDMM_Disc::ComputeNearestBounda_TempSF_ProjMask(int timeSubdiv){
+	int i,j;
+  
+  cout << "Compute the distance map" << endl;
+
+  
+  //compute the ForwardMapping at time 'timeSubdiv' 
+  CptMappingFromVeloField2_Init_IniIdMap(&this->ForwardMapping);
+  for (i=1;i<=timeSubdiv;i++) CptMappingFromVeloField2_Increment(&this->VelocityField,&this->ForwardMapping,i,1);
+  
+  //project the mask in the target image c.s. and at time 'timeSubdiv'
+  if (IniDispFieldDefined==1)
+    Project3DImageUsingDispFieldAndTimeDepVF(&this->IniDispField,&this->Mask,&this->ForwardMapping,&this->ProjMask,0); //proj at time 0 since ForwardMapping is actually 3D
+  else 
+    Project3DImageUsingAffineTransfoAndTimeDepVF(this->Target2TemplateCoord,&this->Mask,&this->ForwardMapping,&this->ProjMask,0); //proj at time 0 since ForwardMapping is actually 3D
+  
+  //compute the distance map
+  if (this->NZ>1) Cpt_NearestBoundaryOLD(&this->ProjMask,&this->NearestBoundary,&this->TempSF,30,this->NbIdInMask,this->IdInMask,this->x_mm,this->y_mm,this->z_mm,0);
+  else Cpt_NearestBoundary2D(&this->ProjMask,&this->NearestBoundary,&this->TempSF,this->NbIdInMask,this->IdInMask,this->x_mm,this->y_mm);
+  
+  //smooth the distance map
+  for (i=0;i<this->NbIdInMask;i++) for (j=0;j<3;j++){
+    Diffusion_3D(&this->NearestBoundary,&this->ProjMask,this->IdInMask[i],1,3,9,0,j,this->x_mm,this->y_mm,this->z_mm);
+  }
+  Diffusion_3D(&this->NearestBoundary,1, 3,1,this->x_mm,this->y_mm,this->z_mm);
+  
+  cout << "Distance map computed" << endl;
+
+}  
+
+
+///Compute the energy gradients
+void LDDMM_Disc::ComputeEnergyGradient(int timeSubdiv){
+	int x,y,z,i;
+  float timeToSmooth,ITERATIONS_NB;
+	float diffGreyLev,SqNormGrad;
+  float minResoMm;
+
+  minResoMm=this->x_mm;
+  if (minResoMm>this->y_mm) minResoMm=this->y_mm;
+  if (minResoMm>this->z_mm) minResoMm=this->z_mm;
+
+  
+  timeToSmooth=this->sigma_fluid*this->sigma_fluid/2;
+  ITERATIONS_NB=2;
+  if ((timeToSmooth/static_cast<float>(ITERATIONS_NB))>24.5) ITERATIONS_NB=4;
+  if ((timeToSmooth/static_cast<float>(ITERATIONS_NB))>120) ITERATIONS_NB=8;
+  //if ((timeToSmooth/static_cast<float>(ITERATIONS_NB))>4.5) ITERATIONS_NB=static_cast<int>(timeToSmooth/4.5)+1; //equivalent to iterative smoothings with Gaussian kernels of 3 mm
+  //if ((timeToSmooth/static_cast<float>(ITERATIONS_NB))>24.5) ITERATIONS_NB=static_cast<int>(timeToSmooth/24.5)+1; //equivalent to iterative smoothings with Gaussian kernels of 7 mm
+  
+  
+  //1) loop on the vector directions (x,y,z)
+  if (this->NZ>1){  //3D image
+    for (i=0;i<3;i++){
+      //compute the scalar field (one dimension out of the vector field) to smooth
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        if ((z<2+this->Margin)||(z>this->NZ-3-this->Margin)||(y<2+this->Margin)||(y>this->NY-3-this->Margin)||(x<2+this->Margin)||(x>this->NX-3-this->Margin))
+          this->FieldToSmooth.P(0,i,x,y,z);
+        else
+          this->FieldToSmooth.P(-(this->J0.G(x,y,z) - this->J1.G(x,y,z)) * this->DetJacobians.G(x,y,z) * this->GradJ.G(i,x,y,z),i,x,y,z);
+      }
+    }
+  }
+  else{  //2D image
+    for (i=0;i<3;i++){
+      //compute the scalar field (one dimension out of the vector field) to smooth
+      for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        if ((y<2+this->Margin)||(y>this->NY-3-this->Margin)||(x<2+this->Margin)||(x>this->NX-3-this->Margin))
+          this->FieldToSmooth.P(0,i,x,y,0);
+        else
+          this->FieldToSmooth.P(-(this->J0.G(x,y,0) - this->J1.G(x,y,0)) * this->DetJacobians.G(x,y,0) * this->GradJ.G(i,x,y,0),i,x,y,0);
+      }
+    }
+  }
+  
+  //2) fluid-like spatial regularisation
+  if (this->MaskFileIndicator==1){
+    //smooth the field
+    SmoothWithinRegions2(&this->FieldToSmooth,&this->ProjMask,timeToSmooth,ITERATIONS_NB,this->NbIdInMask,this->IdInMask,&this->NearestBoundary,&this->TempSF,x_mm,y_mm,z_mm,1);//static_cast<float>(this->InterRegionMargin)
+    
+    //put to zero all the contributions outside of the region 'ExcluReg' if asked...
+    if (fabs(this->ExcluReg+1234.5)>0.001){ 
+      //... 3D
+      if (this->NZ>1) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (fabs(this->ProjMask.G(x,y,z)-this->ExcluReg)>0.001){
+        this->FieldToSmooth.P(0,0,x,y,z);
+        this->FieldToSmooth.P(0,1,x,y,z);
+        this->FieldToSmooth.P(0,2,x,y,z);
+      }
+      //... 2D
+      if (this->NZ==1) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (fabs(this->ProjMask.G(x,y,0)-this->ExcluReg)>0.001){
+        this->FieldToSmooth.P(0,0,x,y,0);
+        this->FieldToSmooth.P(0,1,x,y,0);
+      }
+    }
+    
+  }
+  else 
+    Diffusion_3D(&this->FieldToSmooth,1, timeToSmooth,1,x_mm,y_mm,z_mm);
+
+  
+  //3) set the gradient of Energy
+  if (this->NZ>1){  //3D image
+    for (i=0;i<3;i++){
+      for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        if ((z<2)||(z>this->NZ-3)||(y<2)||(y>this->NY-3)||(x<2)||(x>this->NX-3))
+          this->GradE.P(0,i,x,y,z,timeSubdiv);
+        else 
+          this->GradE.P(this->WghtVelField*2*this->VelocityField.G(i,x,y,z,timeSubdiv) - 2*FieldToSmooth.G(i,x,y,z),i,x,y,z,timeSubdiv);
+      }
+    }
+  }
+  else{  //2D image
+    for (i=0;i<3;i++){
+      for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+        if ((y<2)||(y>this->NY-3)||(x<2)||(x>this->NX-3))
+          this->GradE.P(0,i,x,y,0,timeSubdiv);
+        else 
+          this->GradE.P(this->WghtVelField*2*this->VelocityField.G(i,x,y,0,timeSubdiv) - 2*FieldToSmooth.G(i,x,y,0),i,x,y,0,timeSubdiv);
+      }
+    }
+  }  
+}
+
+
+///smooth the velocity field
+void LDDMM_Disc::DiffusionLikeSmoothing(){
+	int x,y,z,i;
+  float timeToSmooth,DeltaTimeSubdiv;
+	int timeSubdiv;
+  
+  timeToSmooth=this->sigma_diffusion*this->sigma_diffusion/2;
+  
+  if (timeToSmooth>0.001){ 
+    DeltaTimeSubdiv=(timeToSmooth/2)-0.0001;
+    
+    for (timeSubdiv=0;timeSubdiv<this->NbTimeSubdiv;timeSubdiv++){
+      //1)compute the current forward mapping
+      if (timeSubdiv==0)
+        CptMappingFromVeloField2_Init_IniIdMap(&this->ForwardMapping);
+      else
+        CptMappingFromVeloField2_Increment(&this->VelocityField,&this->ForwardMapping,timeSubdiv,1);
+      
+      //2) compute the mask transformed using the forward mapping from time 0 -> J0
+      if (this->MaskFileIndicator==1){
+        if (IniDispFieldDefined==1)
+          Project3DImageUsingDispFieldAndTimeDepVF(&this->IniDispField,&this->Mask,&this->ForwardMapping,&this->ProjMask,0);
+        else 
+          Project3DImageUsingAffineTransfoAndTimeDepVF(this->Target2TemplateCoord,&this->Mask,&this->ForwardMapping,&this->ProjMask,0); //proj at time 0 since ForwardMapping is actually 3D
+      }
+      
+      //copy the velocity field
+      for (i=0;i<3;i++){
+        //compute the scalar field (one dimension out of the vector field) to smooth
+        for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+          this->FieldToSmooth.P(this->VelocityField.G(i,x,y,z,timeSubdiv),i,x,y,z);
+        }
+      }
+      
+      //smooth the scalar field
+      if (this->MaskFileIndicator==1)
+        SmoothWithinRegions(&this->FieldToSmooth,&this->ProjMask,timeToSmooth,DeltaTimeSubdiv,this->NbIdInMask,this->IdInMask,x_mm,y_mm,z_mm,1);
+      else 
+        Diffusion_3D(&this->FieldToSmooth,1, timeToSmooth,1,x_mm,y_mm,z_mm);
+      
+      //save the smoothed field
+      for (i=0;i<3;i++){
+        for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+          this->VelocityField.P(this->FieldToSmooth.G(i,x,y,z),i,x,y,z,timeSubdiv);
+        }
+      }
+    }
+  }
+}
+
+
+///Update VelocityField with with the energy gradients.
+///Return MaxGrad/this->RefMaxGrad
+float LDDMM_Disc::UpdateVelocityField(int IterationNb){
+	int x, y, z, i;
+	float MaxGrad,MultFactor;
+	double LocGrad;
+	
+	//1) Compute the maximum of gradient in all time frames...
+	MaxGrad=0;
+  if (this->NZ>1){  // 3D image
+    for (i=0;i<this->NbTimeSubdiv;i++) for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,z,i),2.)+pow((double)this->GradE.G(1,x,y,z,i),2.)+pow((double)this->GradE.G(2,x,y,z,i),2.));
+      if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+    }
+  }
+	else{  // 2D image
+    for (i=0;i<this->NbTimeSubdiv;i++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      LocGrad=sqrt(pow((double)this->GradE.G(0,x,y,0,i),2.)+pow((double)this->GradE.G(1,x,y,0,i),2.));
+      if (MaxGrad<(float)LocGrad) MaxGrad=(float)LocGrad;
+    }
+  }
+	
+	//2) maximum update control at the first iteration
+	if ((IterationNb==0)&&(RefMaxGrad<0.)) {
+		this->RefMaxGrad=MaxGrad;
+		if (this->RefMaxGrad==0){
+			cout << "It seems that the registered images are identical\n";
+			this->RefMaxGrad=1;
+		}
+		cout << "\n\nRefMaxGrad is set to " << this->RefMaxGrad << ". Keep this value if you continue these\n";
+		cout << "computations (using -PrefixInputs) to manage well the convergence.\n\n";
+	}
+	
+	//3) compute the MultFactor
+	if (MaxGrad>this->RefMaxGrad) MultFactor=this->MaxVelocityUpdate/MaxGrad;
+	else MultFactor=this->MaxVelocityUpdate/(this->RefMaxGrad);
+	
+	//4) Message
+	cout << " -> MaxGrad/RefMaxGrad=" << MaxGrad/this->RefMaxGrad  << "\n";
+	
+	//5) update the vector field...
+  if (this->NZ>1){  // 3D image
+    for (i=0;i<this->NbTimeSubdiv;i++) for (z = 1; z < this->NZ-2; z++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      this->VelocityField.P(this->VelocityField.G(0,x,y,z,i)+this->GradE.G(0,x,y,z,i)*MultFactor,0,x,y,z,i);
+      this->VelocityField.P(this->VelocityField.G(1,x,y,z,i)+this->GradE.G(1,x,y,z,i)*MultFactor,1,x,y,z,i);
+      this->VelocityField.P(this->VelocityField.G(2,x,y,z,i)+this->GradE.G(2,x,y,z,i)*MultFactor,2,x,y,z,i);
+    }
+  }
+	else{  // 2D image
+    for (i=0;i<this->NbTimeSubdiv;i++) for (y = 1; y < this->NY-2; y++) for (x = 1; x < this->NX-2; x++){
+      this->VelocityField.P(this->VelocityField.G(0,x,y,0,i)+this->GradE.G(0,x,y,0,i)*MultFactor,0,x,y,0,i);
+      this->VelocityField.P(this->VelocityField.G(1,x,y,0,i)+this->GradE.G(1,x,y,0,i)*MultFactor,1,x,y,0,i);
+    }
+  }
+	
+	
+	return MaxGrad/this->RefMaxGrad;
+}
+
+
+///save the result of the gradient descent (Beg 2005) for the current 3D image of the 4D time sequence
+void LDDMM_Disc::SaveResultGradientDescent(void){
+	
+	//whole transformations
+	this->SaveVelocityFields(&this->VelocityField,this->PrefixOutputs);
+	this->SaveDeformations(this->PrefixOutputs);
+  this->SaveInvTotalDisplacement(this->PrefixOutputs);
+  
+  
+  
+	if (this->FlowLength==1) this->SaveGlobalFlowLength(this->PrefixOutputs);
+	if (this->DetJacobian==1) this->SaveDetJacobian(this->PrefixOutputs);
+	if (this->FinalDefVec==1) this->SaveTotalDisplacement(this->PrefixOutputs);
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                          FUNCTIONS TO SAVE AND LOAD THE VARIOUS STRUCTURES
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///load the velocity fields
+void LDDMM_Disc::LoadVelocityFields(char Prefix[256]){
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char VelocityField_X[256];
+	char VelocityField_Y[256];
+	char VelocityField_Z[256];
+	VectorField VFtmp;
+  int x,y,z,t,direc;
+  
+	//1) intialisation
+	strcpy(FileNameX,Prefix);
+	strcpy(VelocityField_X,"_VelocityField_X.nii");
+	strcat(FileNameX,VelocityField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(VelocityField_Y,"_VelocityField_Y.nii");
+	strcat(FileNameY,VelocityField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(VelocityField_Z,"_VelocityField_Z.nii");
+	strcat(FileNameZ,VelocityField_Z);
+  
+	//read the input VF
+  VFtmp.Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+  
+  //check if the input VF has the size required or create a null VF
+  if (VFtmp.NT==this->NbTimeSubdiv)
+    this->VelocityField.Read_and_Interpolate(FileNameX,FileNameY,FileNameZ,this->NX,this->NY,this->NZ,1);
+  else
+    this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimeSubdiv);
+  
+  
+  //... in case a stationnary VF is opened
+  if (VFtmp.NT==1){
+    cout << "The input velocity field is stationary -> conversion to time-dependent velocity field" << endl;
+    
+    for (direc=0;direc<3;direc++) for (t=0;t<this->NbTimeSubdiv;t++) for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++)
+      this->VelocityField.P(VFtmp.G(direc,x,y,z),direc,x,y,z,t);
+  }
+}
+
+
+
+
+
+///save the velocity fields
+void LDDMM_Disc::SaveVelocityFields(VectorField * VelocityFieldLoc,char Prefix[256]){
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char VelocityField_X[256];
+	char VelocityField_Y[256];
+	char VelocityField_Z[256];
+	
+	//intialisation
+	strcpy(FileNameX,Prefix);
+	strcpy(VelocityField_X,"_VelocityField_X.nii");
+	strcat(FileNameX,VelocityField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(VelocityField_Y,"_VelocityField_Y.nii");
+	strcat(FileNameY,VelocityField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(VelocityField_Z,"_VelocityField_Z.nii");
+	strcat(FileNameZ,VelocityField_Z);
+	
+	//save the velocity field
+	VelocityFieldLoc->Write(FileNameX,FileNameY,FileNameZ,this->TargetFile);
+}
+
+
+
+
+
+///save the deformations in time subdivisions (not the convergence)
+void LDDMM_Disc::SaveDeformations(char Prefix[256]){
+	int TimeLoc,x, y, z;
+	ScalarField Temp4DField;
+	ScalarField Temp3DField;
+	char FileName[256];
+	char Deformations[256];
+	char FinalDef[256];
+	ScalarField source_image;
+	
+  //save temporary the total forward mapping in 'BackwardMapping'
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->BackwardMapping);
+
+	//read the original input image (with no treatments)
+	source_image.Read(this->SourceFile);
+	
+	//intialisation
+	Temp4DField.CreateVoidField(this->NX, this->NY, this->NZ,this->NbTimeSubdiv);
+	strcpy(Deformations,"_Deformation.nii");
+	
+	Temp3DField.CreateVoidField(this->NX, this->NY, this->NZ);
+	strcpy(FinalDef,"_FinalDefSrc.nii");
+	
+	//save the deformations
+	for (TimeLoc=0;TimeLoc<this->NbTimeSubdiv;TimeLoc++){
+    if (IniDispFieldDefined==1)
+      Project3DImageUsingDispFieldAndTimeDepVF(&this->IniDispField,&source_image,&this->BackwardMapping,&this->J0,TimeLoc);
+    else 
+      Project3DImageUsingAffineTransfoAndTimeDepVF(this->Target2TemplateCoord,&source_image,&this->BackwardMapping,&this->J0,TimeLoc); 
+    
+		for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+			Temp4DField.P(this->J0.G(x,y,z),x, y, z, TimeLoc);
+		
+		if (TimeLoc==this->NbTimeSubdiv-1)
+			for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+				Temp3DField.P(this->J0.G(x,y,z),x, y, z);
+	}
+	
+	
+	
+	
+	strcpy(FileName,Prefix);
+	strcat(FileName,Deformations);
+	Temp4DField.Write(FileName,this->TargetFile);
+	
+	
+	strcpy(FileName,Prefix);
+	strcat(FileName,FinalDef);
+	Temp3DField.Write(FileName,this->TargetFile);
+	//Temp3DField.Write(FileName,"./RefImages/ComplexCircleSrc.nii",this->TargetFile);
+  
+  //restore the total backward mapping in 'BackwardMapping'
+  CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+}
+
+
+
+///save the inverse deformation field
+void LDDMM_Disc::SaveInvTotalDisplacement(char Prefix[256]){
+  VectorField RealDisplacementField;
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char InvDisplacementField_X[256];
+	char InvDisplacementField_Y[256];
+	char InvDisplacementField_Z[256];
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tmpX2,tmpY2,tmpZ2;
+  float tempQuat[4][4];
+  int x,y,z;
+  float flX,flY,flZ;
+
+	//intialisation
+  RealDisplacementField.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+	strcpy(FileNameX,Prefix);
+	strcpy(InvDisplacementField_X,"_DispField_Trg2Src_X.nii");
+	strcat(FileNameX,InvDisplacementField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(InvDisplacementField_Y,"_DispField_Trg2Src_Y.nii");
+	strcat(FileNameY,InvDisplacementField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(InvDisplacementField_Z,"_DispField_Trg2Src_Z.nii");
+	strcat(FileNameZ,InvDisplacementField_Z);
+	
+  //compute the forward mapping in BackwardMapping
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->BackwardMapping);
+  
+  
+  //compute the inverse of the total displacement field in mm (world coordinate)
+  
+  
+  if (IniDispFieldDefined!=1){  //+++++++ Case A: Only an initial affine alignment is considered between the images +++++++
+    
+    mult_quat4t4mat_quat4t4mat(World_Target2Template,ImTarget.Image2World,tempQuat);
+    
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+      
+      trgX=x*ImTarget.Image2World[0][0]+y*ImTarget.Image2World[0][1]+z*ImTarget.Image2World[0][2]+ImTarget.Image2World[0][3];
+      trgY=x*ImTarget.Image2World[1][0]+y*ImTarget.Image2World[1][1]+z*ImTarget.Image2World[1][2]+ImTarget.Image2World[1][3];
+      trgZ=x*ImTarget.Image2World[2][0]+y*ImTarget.Image2World[2][1]+z*ImTarget.Image2World[2][2]+ImTarget.Image2World[2][3];
+      
+      tmpX=this->BackwardMapping.G(0,flX,flY,flZ,this->VelocityField.NT-1);
+      tmpY=this->BackwardMapping.G(1,flX,flY,flZ,this->VelocityField.NT-1);
+      tmpZ=this->BackwardMapping.G(2,flX,flY,flZ,this->VelocityField.NT-1);
+      
+      srcX=tmpX*tempQuat[0][0]+tmpY*tempQuat[0][1]+tmpZ*tempQuat[0][2]+tempQuat[0][3];
+      srcY=tmpX*tempQuat[1][0]+tmpY*tempQuat[1][1]+tmpZ*tempQuat[1][2]+tempQuat[1][3];
+      srcZ=tmpX*tempQuat[2][0]+tmpY*tempQuat[2][1]+tmpZ*tempQuat[2][2]+tempQuat[2][3];
+      
+      
+      RealDisplacementField.P(srcX-trgX,0,x,y,z);
+      RealDisplacementField.P(srcY-trgY,1,x,y,z);
+      RealDisplacementField.P(srcZ-trgZ,2,x,y,z);
+      
+    }
+  }
+  else{ //+++++++ Case B: The initial alignment between the images is encoded in a displacement field +++++++
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+      flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+      
+      trgX=x*ImTarget.Image2World[0][0]+y*ImTarget.Image2World[0][1]+z*ImTarget.Image2World[0][2]+ImTarget.Image2World[0][3];
+      trgY=x*ImTarget.Image2World[1][0]+y*ImTarget.Image2World[1][1]+z*ImTarget.Image2World[1][2]+ImTarget.Image2World[1][3];
+      trgZ=x*ImTarget.Image2World[2][0]+y*ImTarget.Image2World[2][1]+z*ImTarget.Image2World[2][2]+ImTarget.Image2World[2][3];
+      
+      tmpX=this->BackwardMapping.G(0,flX,flY,flZ,this->VelocityField.NT-1);
+      tmpY=this->BackwardMapping.G(1,flX,flY,flZ,this->VelocityField.NT-1);
+      tmpZ=this->BackwardMapping.G(2,flX,flY,flZ,this->VelocityField.NT-1);
+      
+      tmpX2=this->IniDispField.G(0,tmpX,tmpY,tmpZ);
+      tmpY2=this->IniDispField.G(1,tmpX,tmpY,tmpZ);
+      tmpZ2=this->IniDispField.G(2,tmpX,tmpY,tmpZ);
+      
+      srcX=tmpX2*ImTemplate.Image2World[0][0]+tmpY2*ImTemplate.Image2World[0][1]+tmpZ2*ImTemplate.Image2World[0][2]+ImTemplate.Image2World[0][3];
+      srcY=tmpX2*ImTemplate.Image2World[1][0]+tmpY2*ImTemplate.Image2World[1][1]+tmpZ2*ImTemplate.Image2World[1][2]+ImTemplate.Image2World[1][3];
+      srcZ=tmpX2*ImTemplate.Image2World[2][0]+tmpY2*ImTemplate.Image2World[2][1]+tmpZ2*ImTemplate.Image2World[2][2]+ImTemplate.Image2World[2][3];
+      
+      RealDisplacementField.P(srcX-trgX,0,x,y,z);
+      RealDisplacementField.P(srcY-trgY,1,x,y,z);
+      RealDisplacementField.P(srcZ-trgZ,2,x,y,z);
+    }
+    
+  }
+  
+  
+	//save the deformation field
+	RealDisplacementField.Write(FileNameX,FileNameY,FileNameZ,TargetFile);
+  
+  //recompute the real backward mapping
+  CptMappingFromVeloField_IniIdMap(0,&this->VelocityField,&this->BackwardMapping);
+}
+
+
+
+
+///save the inverse deformation field
+void LDDMM_Disc::SaveTotalDisplacement(char Prefix[256]){
+  VectorField RealDisplacementField;
+	char FileNameX[256];
+	char FileNameY[256];
+	char FileNameZ[256];
+	char DisplacementField_X[256];
+	char DisplacementField_Y[256];
+	char DisplacementField_Z[256];
+  float srcX,srcY,srcZ;
+  float trgX,trgY,trgZ;
+  float tmpX,tmpY,tmpZ;
+  float tmpX2,tmpY2,tmpZ2;
+  float flX,flY,flZ;
+  float tempQuat[4][4];
+  float tempQuat2[4][4];
+  int x,y,z;
+  float World_Template2Target[4][4];
+
+	//intialisation
+  RealDisplacementField.CreateVoidField(ImTemplate.NX,ImTemplate.NY,ImTemplate.NZ);
+  
+	strcpy(FileNameX,Prefix);
+	strcpy(DisplacementField_X,"_DispField_Src2Trg_X.nii");
+	strcat(FileNameX,DisplacementField_X);
+	strcpy(FileNameY,Prefix);
+	strcpy(DisplacementField_Y,"_DispField_Src2Trg_Y.nii");
+	strcat(FileNameY,DisplacementField_Y);
+	strcpy(FileNameZ,Prefix);
+	strcpy(DisplacementField_Z,"_DispField_Src2Trg_Z.nii");
+	strcat(FileNameZ,DisplacementField_Z);
+	
+  //compute the forward mapping in BackwardMapping
+  CptMappingFromVeloField_IniIdMap(this->BackwardMapping.NT-1,&this->VelocityField,&this->BackwardMapping);
+  
+  
+  //compute the total displacement field in mm (world coordinate)
+  invert_4t4quaternion(World_Target2Template,World_Template2Target);
+  mult_quat4t4mat_quat4t4mat(World_Template2Target,ImTemplate.Image2World,tempQuat);
+  mult_quat4t4mat_quat4t4mat(ImTarget.World2Image,tempQuat,tempQuat2);
+  
+  for (z = 0; z < ImTemplate.NZ; z++)  for (y = 0; y < ImTemplate.NY; y++) for (x = 0; x < ImTemplate.NX; x++){
+    flX=static_cast<float>(x); flY=static_cast<float>(y); flZ=static_cast<float>(z);
+    
+    srcX=flX*ImTemplate.Image2World[0][0]+flY*ImTemplate.Image2World[0][1]+flZ*ImTemplate.Image2World[0][2]+ImTemplate.Image2World[0][3];
+    srcY=flX*ImTemplate.Image2World[1][0]+flY*ImTemplate.Image2World[1][1]+flZ*ImTemplate.Image2World[1][2]+ImTemplate.Image2World[1][3];
+    srcZ=flX*ImTemplate.Image2World[2][0]+flY*ImTemplate.Image2World[2][1]+flZ*ImTemplate.Image2World[2][2]+ImTemplate.Image2World[2][3];
+
+    tmpX=flX*tempQuat2[0][0]+flY*tempQuat2[0][1]+flZ*tempQuat2[0][2]+tempQuat2[0][3];
+    tmpY=flX*tempQuat2[1][0]+flY*tempQuat2[1][1]+flZ*tempQuat2[1][2]+tempQuat2[1][3];
+    tmpZ=flX*tempQuat2[2][0]+flY*tempQuat2[2][1]+flZ*tempQuat2[2][2]+tempQuat2[2][3];
+    
+    tmpX2=this->BackwardMapping.G(0,tmpX,tmpY,tmpZ,0);
+    tmpY2=this->BackwardMapping.G(1,tmpX,tmpY,tmpZ,0);
+    tmpZ2=this->BackwardMapping.G(2,tmpX,tmpY,tmpZ,0);
+    
+    trgX=tmpX2*ImTarget.Image2World[0][0]+tmpY2*ImTarget.Image2World[0][1]+tmpZ2*ImTarget.Image2World[0][2]+ImTarget.Image2World[0][3];
+    trgY=tmpX2*ImTarget.Image2World[1][0]+tmpY2*ImTarget.Image2World[1][1]+tmpZ2*ImTarget.Image2World[1][2]+ImTarget.Image2World[1][3];
+    trgZ=tmpX2*ImTarget.Image2World[2][0]+tmpY2*ImTarget.Image2World[2][1]+tmpZ2*ImTarget.Image2World[2][2]+ImTarget.Image2World[2][3];
+    
+    
+    RealDisplacementField.P(trgX-srcX,0,x,y,z);
+    RealDisplacementField.P(trgY-srcY,1,x,y,z);
+    RealDisplacementField.P(trgZ-srcZ,2,x,y,z);
+  }
+  
+	//save the deformation field
+	RealDisplacementField.Write(FileNameX,FileNameY,FileNameZ,SourceFile);
+}
+ 
+
+
+
+
+
+///save the total length of the flow of deformation from each voxel of the image
+void LDDMM_Disc::SaveGlobalFlowLength(char Prefix[256]){
+	char VeloLength[256];
+	char EvoVeloLength[256];
+	
+	strcpy(VeloLength,"_TotalAOD.nii");
+	this->SaveFlowLength(&this->VelocityField,&this->VelocityField,this->PrefixOutputs,VeloLength);
+	
+	strcpy(EvoVeloLength,"EvoAOD.nii");
+	this->SaveEvoFlowLength(&this->VelocityField,&this->VelocityField,this->PrefixOutputs,EvoVeloLength);
+}
+
+
+
+
+///By following the flow defined by the velocity field 'VeloField4Flow' PROJECT AT T=0 the contribution of
+///'VeloField4Measure' in the total length of the flow from each point of the field.
+/// * 'VeloField4Measure' is assumed to be part of a linear decomposition of 'VeloField4Flow'.
+/// * If 'VeloField4Measure'=='VeloField4Flow' then the length of the flow defined by 'VeloField4Flow'
+///   is computed.
+void LDDMM_Disc::SaveFlowLength(VectorField * VeloField4Flow,VectorField * VeloField4Measure,char Prefix[256],char Suffix[256]){
+	ScalarField LengthOfFlow;
+	char FlowLength[256];
+	char FileName[256];
+	
+	CptLengthOfFlow(VeloField4Flow,VeloField4Measure,&LengthOfFlow);
+	
+	
+	strcpy(FlowLength,Suffix);
+	strcpy(FileName,Prefix);
+	strcat(FileName,FlowLength);
+	LengthOfFlow.Write(FileName,this->TargetFile);
+}
+
+///By following the flow defined by the velocity field 'VeloField4Flow' FOLLOW IN TIME the contribution of
+///'VeloField4Measure' in the length of the flow from each point of the field.
+/// * 'VeloField4Measure' is assumed to be part of a linear decomposition of 'VeloField4Flow'.
+/// * If 'VeloField4Measure'=='VeloField4Flow' then the length of the flow defined by 'VeloField4Flow'
+///   is computed.
+void LDDMM_Disc::SaveEvoFlowLength(VectorField * VeloField4Flow,VectorField * VeloField4Measure,char Prefix[256],char Suffix[256]){
+	ScalarField LengthOfFlow;
+	char FlowLength[256];
+	char FileName[256];
+	
+	CptEvoLengthOfFlow(VeloField4Flow,VeloField4Measure,&LengthOfFlow);
+	
+	
+	strcpy(FlowLength,Suffix);
+	strcpy(FileName,Prefix);
+	strcat(FileName,FlowLength);
+	LengthOfFlow.Write(FileName,this->TargetFile);
+}
+
+
+
+
+///save the map of the determinant of Jacobians
+void LDDMM_Disc::SaveDetJacobian(char Prefix[256]){
+	char FileName[256];
+	char StrDetJacobians[256];
+	
+	//compute the determinant of jacobian
+	CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+	
+	Cpt_JacobianDeterminant(&BackwardMapping,&DetJacobians,0);
+	
+	strcpy(StrDetJacobians,"_DetJacobian.nii");
+	
+	strcpy(FileName,Prefix);
+	strcat(FileName,StrDetJacobians);
+	DetJacobians.Write(FileName,this->TargetFile);
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                      RUN FUNCTIONS
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+
+///Function to solve the registration using the gradient descent algorithm of Beg 05
+void LDDMM_Disc::Run_Default(void){
+	int IterationStopper;
+	int IterationNb;
+	int TimeSubdiv;
+	float SqrtSSD;
+	float NormaMaxGrad;  //[maximum gradient at the current iteration] / [maximum gradient at the first iteration]
+	
+	//1) INITIALISATION
+	//1.1) Pre-treatment of the inuput images (grey level alignment + margins)
+	this->ReadAndTreatInputImages();
+	
+	//1.2) Allocations of the scalar and vector fields + definition of global parameters
+	this->AllocateAllVariables();
+	
+	//1.3) Compute once for all the projected map 'ProjMask' / 'TempSF' / the distance map 'NearestBoundary'
+	if (this->MaskFileIndicator==1) this->ComputeNearestBounda_TempSF_ProjMask(0);
+	
+  
+	//2) GRADIENT DESCENT
+	if (this->iteration_nb==0) IterationStopper=1;
+	else IterationStopper=0;
+	IterationNb=0;
+
+	while (IterationStopper==0){
+		cout << "Iteration Number " << IterationNb+1 << " / " << this->iteration_nb << "\n";
+		
+		//2.1) compute the backward mapping on space
+		CptMappingFromVeloField_IniIdMap(this->VelocityField.NT-1,&this->VelocityField,&this->BackwardMapping);
+		
+		
+		//2.2) LOOP ON THE TIME SUBDIVISIONS
+		for (TimeSubdiv=0;TimeSubdiv<this->NbTimeSubdiv;TimeSubdiv++){//LOOP ON THE TIME SUBDIVISIONS
+			//2.2.1)compute the current forward mapping
+      if (TimeSubdiv==0)
+        CptMappingFromVeloField2_Init_IniIdMap(&this->ForwardMapping);
+      else
+        CptMappingFromVeloField2_Increment(&this->VelocityField,&this->ForwardMapping,TimeSubdiv,1);
+      
+      //2.2.2) compute the determinant of the jacobian of the transformation
+			Cpt_JacobianDeterminant(&BackwardMapping,&DetJacobians,TimeSubdiv);
+			
+      //2.2.3) compute the source image transformed using the forward mapping from time 0 -> J0
+      if (IniDispFieldDefined==1)
+        Project3DImageUsingDispFieldAndTimeDepVF(&this->IniDispField,&this->ImTemplate,&this->ForwardMapping,&this->J0,0);
+      else 
+        Project3DImageUsingAffineTransfoAndTimeDepVF(this->Target2TemplateCoord,&this->ImTemplate,&this->ForwardMapping,&this->J0,0); //proj at time 0 since ForwardMapping is actually 3D
+      
+      
+      //2.2.4) compute the target image transformed using the backward mapping from time 1 -> J1
+      Project3Dimage(&this->ImTarget,&this->BackwardMapping,&this->J1,TimeSubdiv);
+
+      //2.2.5) compute the mask transformed using the forward mapping from time 0 -> J0
+      //if (this->MaskFileIndicator==1){
+      //  if (IniDispFieldDefined==1)
+      //    Project3DImageUsingDispFieldAndTimeDepVF(&this->IniDispField,&this->Mask,&this->ForwardMapping,&this->ProjMask,0);
+      //  else 
+      //    Project3DImageUsingAffineTransfoAndTimeDepVF(this->Target2TemplateCoord,&this->Mask,&this->ForwardMapping,&this->ProjMask,0); //proj at time 0 since ForwardMapping is actually 3D
+      //}
+      
+      
+      //2.2.6) compute gradient of J
+      Cpt_Grad_ScalarField(&this->J0,&this->GradJ);
+      
+      //2.2.7) compute the gradient of energy (includes the fluid-like spatial regularisation)
+      this->ComputeEnergyGradient(TimeSubdiv);
+      
+    }
+		
+    
+		//2.3) update the velocity fields
+		NormaMaxGrad=this->UpdateVelocityField(IterationNb);
+		
+    
+		//2.4) smooth the velocity field (if asked... which sould not be the case in LDDMM)
+    if (this->sigma_diffusion>0.01) this->DiffusionLikeSmoothing();
+    
+		//2.5) end of the convergence...
+		//...controled by the number of iterations
+		IterationNb++;
+		if (IterationNb>=this->iteration_nb) IterationStopper=1;
+	}
+	
+	//3) SAVE THE RESULTS
+	this->SaveResultGradientDescent();
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///                                        MAIN RUN FUNCTION 
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+///run function
+void LDDMM_Disc::Run(void)
+{
+		this->Run_Default();
+}
+

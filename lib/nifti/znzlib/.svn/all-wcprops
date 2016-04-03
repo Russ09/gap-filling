@@ -1,0 +1,29 @@
+K 25
+svn:wc:ra_dav:version-url
+V 52
+/forge/utilzregAdvanced/!svn/ver/27/lib/nifti/znzlib
+END
+znzlib.c
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/forge/utilzregAdvanced/!svn/ver/27/lib/nifti/znzlib/znzlib.c
+END
+config.h
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/forge/utilzregAdvanced/!svn/ver/27/lib/nifti/znzlib/config.h
+END
+CMakeLists.txt
+K 25
+svn:wc:ra_dav:version-url
+V 66
+/forge/utilzregAdvanced/!svn/ver/1/lib/nifti/znzlib/CMakeLists.txt
+END
+znzlib.h
+K 25
+svn:wc:ra_dav:version-url
+V 61
+/forge/utilzregAdvanced/!svn/ver/27/lib/nifti/znzlib/znzlib.h
+END

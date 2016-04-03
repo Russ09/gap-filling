@@ -1,0 +1,168 @@
+/*=========================================================================
+ 
+ Date      : $Date: 02.07.2015$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#ifndef _IRTKLARGEDEFORMATIONGRADIENTLAGRANGE_H
+#define _IRTKLARGEDEFORMATIONGRADIENTLAGRANGE_H
+
+#include <SciCalcPack.h>
+
+
+/**
+ * Class for basic Demons registration
+ */
+
+class LargeDefDemons{
+private:
+	
+protected:
+	/// Function to launch the default calculations
+	virtual void Run_Default();
+	
+	
+	/// functions to perform the registration
+	virtual void AllocateAllVariables();
+	virtual void ReadAndTreatInputImages();
+	virtual void SaveResultGradientDescent();
+	virtual void ComputeUpdateFieldSSD();
+    virtual void ComputeUpdateFieldSSD_multiChannel();
+	virtual void ComputeUpdateFieldMI();
+	virtual void ComputeUpdateFieldLDMK();
+	virtual void ReadAndConvertMapping();
+	virtual void ControlMaxUpdate(int IterationNb);
+    virtual void UpdateMetamo(int IterationNb,float refMultFactor=0.1,float ThreshZero=0.01);
+    virtual void LandmarksInfluence(int IterationNb);
+  
+	///functions to save and load various structures
+	virtual void LoadVelocityField(char *);
+	virtual void SaveDisplacementField(VectorField *, char *);
+	virtual void SaveInvTotalDisplacement(VectorField *, char *);
+	virtual void SaveTotalDisplacement(VectorField *, char *);
+	virtual void SaveVelocityField(VectorField *, char *);
+	virtual void SaveDefSourceImage(char *);
+	virtual void SaveTemporalDefSourceImage(char *);
+	virtual void SaveMetamo(char *);
+	virtual float EstimRefUpdateScale(float,LightFFTconvolver3D *);
+  
+	/// Protected parameters
+	//scalar and vector fields
+	ScalarField * ImTemplate;       //3D image  * [nb channels]
+	ScalarField * ImTarget;         //3D image  * [nb channels]
+	ScalarField Mask;
+	ScalarField DiscMask;
+  ScalarField MetamoField;
+  ScalarField UpdateMetamoField;
+	ScalarField DeformedTemplate;
+	VectorField VelocityField;
+	VectorField GradE;
+  VectorField TempVF;
+  VectorField IniDispField;
+  ScalarField MetamoTempSF;
+  ScalarField MetamoTempSF2;
+  ScalarField MetamoRegForces;
+  
+  //landmarks
+  LDMK_Points SourceLandmarks;
+  LDMK_Points TargetLandmarks;
+  
+  //FFT convolver
+  LightFFTconvolver3D FFTconvolver_fluid;
+  LightFFTconvolver3D FFTconvolver_Diff;
+
+  //parameters related to the mutual information
+  MImanager NorMutInfMan;
+	
+  //Quaternion to convert target coordinates into template (=source) coordinates
+  float Target2TemplateCoord[4][4];
+  
+  //... and its inverse
+  float Template2TargetCoord[4][4];
+  
+	//size of the fields
+	int NX;
+	int NY;
+	int NZ;
+	int NT;
+
+  //size of the source image
+  int NXs;
+	int NYs;
+	int NZs;
+  
+  
+	
+public:
+	
+	/// Constructor
+	LargeDefDemons();
+	
+	/// Destructor
+	~LargeDefDemons();
+	
+	/// Run  Large Deformation registration
+	virtual void Run();
+	
+	
+	/// public Parameters
+	int iteration_nb;              //number of iterations 
+	float MaxVelocityUpdate;       //Maximum allowed velocity update at each subdivision and iteration (in voxels)
+	float RefMaxGrad;              //Reference update gradient (typically the value of MaxGrad at the 1st iteration)
+	int Margin;                    //Margin of the image in voxels where the calculations are reduced
+	float alpha;                   //diffusion factor
+  int IndicatorFFT_fluid;
+  int IndicatorMI;
+  int IndicatorLandmarks;
+	float DefField_TimeSmooth;  // |
+  int   DefField_NbSubdiv;    // |-> if a Gaussian kernel is considered
+	float Update_TimeSmooth;    // |
+	int   Update_NbSubdiv;      // |
+	float w1,w2,w3,w4,w5,w6,w7;                             // |
+	float sigma1,sigma2,sigma3,sigma4,sigma5,sigma6,sigma7; // | -> if a multiscale kernel is considered
+  int NbKernelScales;                                     // |
+  float sigmaDiff;
+  char PrefixInputs[256];        //Prefix of the files containing an initial velocity field
+	char PrefixOutputs[256];       //Prefix of the files containing the final velocity field
+	char SourceFiles[100][256];   //name of the file(s) containing the source image (or the different source channels) 
+	char TargetFiles[100][256];   //name of the file(s) containing the target image (or the different source channels)
+  char SourceLandmarksFile[256];
+	char TargetLandmarksFile[256];
+	char MaskFile[256];           //file containing the mask
+	char DiscMaskFile[256];           //file containing the mask
+	int MaskDefined;  
+	int DiscMaskDefined;  
+  int NbIdInDiscMask;               //
+  float * IdInDiscMask;             //
+  VectorField NearestBoundary;  //
+  ScalarField TempSF;           //
+	float weightsChannels[100];   //weights one the different channels
+  int NbChannels;
+  float lambdaX;            //controls the matching uncertainty
+	float InitMaxUpdate;
+	float InitMaxUpdateLDMK;
+  float MaxUpdateAllowed;
+  float World_Target2Template[4][4]; // in the world domain, affine registration that matches the target image to the template (source) image
+  float x_mm,y_mm,z_mm;   //voxel size in mm
+  float UnderSampleTrgFactor;
+  int IniDispFieldDefined;
+  char IniDispFieldX[256];
+  char IniDispFieldY[256];
+  char IniDispFieldZ[256];
+  float BoundaMargin;
+  int IndicatorSaveDF_Trg2Src;
+  int IndicatorSaveDF_Src2Trg;
+  int IndicatorSaveDefImag;
+  int IndicatorSaveSTdefoSrcImag;
+  int IndicatorSaveVF;
+  int IndicatorMetamo;
+  float FactorMetamo0;
+  float lambdaMetamo0;
+  float lambdaMetamo1;
+  float lambdaMetamo2;
+  
+};
+
+
+#endif

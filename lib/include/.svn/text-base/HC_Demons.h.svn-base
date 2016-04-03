@@ -1,0 +1,120 @@
+/*=========================================================================
+ 
+ Date      : $Date: 18.01.2011$
+ Changes   : $Authors: Laurent Risser, Francois-Xavier Vialard$
+ 
+ =========================================================================*/
+
+#ifndef _HC_DEMONS_H
+#define _HC_DEMONS_H
+
+#include <SciCalcPack.h>
+
+
+/**
+ * Class for basic Demons registration
+ */
+
+class HighlyConstrainedDemons{
+private:
+	
+protected:
+	
+	
+	/// functions to perform the registration
+	virtual void AllocateAllVariables();
+	virtual void ReadAndTreatInputImages();
+	virtual void SaveResultGradientDescent();
+	virtual void ComputeUpdateFieldSSD();
+	virtual void ComputeUpdateFieldMI();
+	virtual void ReadAndConvertMapping();
+	virtual void ControlUpdates(int IterationNb);
+  virtual void GenerateCurrentVF();
+  
+	///functions to save and load various structures
+	virtual void LoadVelocityField(char *);
+	virtual void SaveInvTotalDisplacement(VectorField *, char *);
+	virtual void SaveTotalDisplacement(VectorField *, char *);
+	virtual void SaveVelocityField(VectorField *, char *);
+	virtual void SaveDeformations(char *);
+	
+	/// Protected parameters
+	//scalar and vector fields
+	ScalarField MovingIm;       //3D image
+	ScalarField FixedIm;         //3D image
+	ScalarField Mask;
+	ScalarField DeformedMovingIm;
+	VectorField VelocityField;
+	VectorField GradE;
+  VectorField IniDispField;
+  
+  //reference vector fields and their weights
+  VectorField Ref_VF[100];       //velocity fields on which the updates are projected
+  float Ref_VF_weights[100];
+  float Ref_VF_weightsUpdates[100];
+  
+  
+  //parameters related to the mutual information
+  MImanager NorMutInfMan;
+	
+  //Quaternion to convert FixedIm coordinates into MovingIm (=source) coordinates
+  float FixedIm2MovingImCoord[4][4];
+  
+	//size of the fields
+	int NX;
+	int NY;
+	int NZ;
+	int NT;
+
+  //size of the moving image
+  int NXs;
+	int NYs;
+	int NZs;
+  
+  
+	
+public:
+	
+	/// Constructor
+	HighlyConstrainedDemons();
+	
+	/// Destructor
+	~HighlyConstrainedDemons();
+	
+	/// Run  Large Deformation registration
+	virtual void Run();
+	
+	
+	/// public Parameters
+	int iteration_nb;              //number of iterations 
+	float MaxVelocityUpdate;       //Maximum allowed velocity update at each subdivision and iteration (in voxels)
+	float RefMaxGrad;              //Reference update gradient (typically the value of MaxGrad at the 1st iteration)
+  int IndicatorMI;
+  int IndicatorLASSO;
+  int IndicatorMask;
+  float MaxLassoReg;
+  float LassoLevel;
+  float InitMaxVelocity;
+  char PrefixInputs[256];        //Prefix of the files containing an initial velocity field
+	char PrefixOutputs[256];       //Prefix of the files containing the final velocity field
+	char MovingImFile[256];         //name of the file containing the moving image 
+	char FixedImFile[256];         //name of the file containing the fixed image 
+	char MaskFile[256];         
+  float lambdaX;                 //controls the matching uncertainty
+	float InitMaxUpdate;
+  float MaxUpdateAllowed;
+  float World_FixedIm2MovingIm[4][4]; // in the world domain, affine registration that matches the fixed image to the moving image
+  float x_mm,y_mm,z_mm;               //voxel size in mm
+  int IniDispFieldDefined;
+  char IniDispFieldX[256];
+  char IniDispFieldY[256];
+  char IniDispFieldZ[256];
+  char File_Ref_VF_X[100][256];       //X axis of the velocity fields on which the updates are projected
+  char File_Ref_VF_Y[100][256];       //Y axis of the velocity fields on which the updates are projected
+  char File_Ref_VF_Z[100][256];       //Z axis of the velocity fields on which the updates are projected
+  int Ref_VF_nb;
+
+};
+
+
+#endif

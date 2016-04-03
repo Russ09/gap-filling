@@ -1,0 +1,100 @@
+/*=========================================================================
+  Date      : $Date: 09.02.2010$
+=========================================================================*/
+
+#ifndef _IRTKLOGDEMONS_H
+#define _IRTKLOGDEMONS_H
+
+#include <SciCalcPack.h>
+
+class LogDemons
+{
+  ///private parameters
+  private:
+  VectorField InvDiffeo, Diffeo, NablaI, VelocityField,TempInvDiffeoLocal,OptimizedVelocityField;
+  VectorField GradientVelocityField, TempGradient, AdjointVectorField,TempDiffeo,TempInvDiffeo,TempDiffeoLocal,TempVectorField;
+  ScalarField * ImTemplate;
+  ScalarField * ImTarget;
+  ScalarField * ShootedImage;
+  ScalarField * AdjointImage;
+  ScalarField * TempAdImage;
+//  ScalarField *AdjointDiffeo; //to remove
+  //VectorField *GradientDiffeo; //to remove
+//  ScalarField *DiffeoTemplate;
+//  ScalarField *DiffeoTarget;
+  int NX;
+  int NY;
+  int NZ;
+  int NT;
+  float DeltaX;   // voxel size
+  int IterationNumber;  // number of iterations in the shooting method
+  float DeltaTimeSubdiv;  // time step of one iteration
+  float (*Limiter)(float,float); // Generic name for the limiter that can be SuperBee, UpWind or MinMod 
+  float Cost;  // Cost to optimize
+  
+  
+  ///public functions
+  public:
+
+  LogDemons();
+  ~LogDemons();
+  void AllocateVariablesShooting();
+  void InitializeAdjointVariables();
+  void InitializeShootingVariables();
+  void ReadAndTreatInputImages();
+  void ReadAndTreatInputDeformation();
+  //void ComputeVelocityField();
+  void SmoothTempGradVeloField(VectorField * tempGradient);
+  void ComputeAdjointVectorField();
+  void SchemeSolve();
+  void Shooting();
+  void GradientDescent(int, float);
+  void CptShootingGradient();
+  void SaveResult();
+  float SimilarityMeasure();
+  void Run();
+  
+  
+  static inline float MinModLimiter(float a, float b)
+  {
+    if (a*b>0.0)
+    {
+      if (a<b){return a;}
+      else {return b;}
+    }
+    return 0.0;
+  }
+  
+  static inline float UpWindLimiter(float a,float b){return 0.0;}
+
+  static float SuperBeeLimiter(float , float);
+  
+    
+  /// public Parameters
+  int NbChannels;
+  char SourceImageName[256];
+  char TargetImageName[256];
+  char SourceDefoX[256];
+  char SourceDefoY[256];
+  char SourceDefoZ[256];
+  char TargetDefoX[256];
+  char TargetDefoY[256];
+  char TargetDefoZ[256];
+  int NbTimes; // Number of times from time 0 to time T
+  int NbIter;
+  FFTconvolver3D FFTconvolver; //fft convolver (to smooth the images)
+  float alpha;// weight of the norm in the cost function
+  double weight1,sigmaX1,sigmaY1,sigmaZ1;
+  double weight2,sigmaX2,sigmaY2,sigmaZ2;
+  double weight3,sigmaX3,sigmaY3,sigmaZ3;
+  double weight4,sigmaX4,sigmaY4,sigmaZ4;
+  int GreyLevAlign, Margin;
+  float GLA_Padding_Src;         //if grey level alignment: padding value for the source image
+  float GLA_Padding_Trg;         //if grey level alignment: padding value for the target image
+  float MaxUpdate; // maximum size of the update in the GradientDescent
+  int indicatorLimiter; // Choice of the spatial scheme:  0 for UpWind, 1 is MinMod (default), 2 for SuperBee, 
+  char PrefixOutputs[256];       //Prefix of the files containing the final velocity field
+  int IndicatorDiffeoTarget; //0: match images (default) / 1: compute the log of a deformation 
+};
+
+#endif

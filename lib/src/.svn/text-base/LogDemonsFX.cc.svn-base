@@ -1,0 +1,809 @@
+/*=========================================================================
+ Date      : $Date: 11.01.2011$ updated
+ =========================================================================*/
+
+#include <LogDemonsFX.h>
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///constructor
+LogDemons::LogDemons()
+{
+  //default parameters
+  strcpy(this->SourceImageName,"Null");
+  strcpy(this->TargetImageName,"Null");
+  strcpy(this->SourceDefoX,"Null");
+  strcpy(this->SourceDefoY,"Null");
+  strcpy(this->SourceDefoZ,"Null");
+  strcpy(this->TargetDefoX,"Null");
+  strcpy(this->TargetDefoY,"Null");
+  strcpy(this->TargetDefoZ,"Null");
+  this->NbTimes=10;
+  this->NbIter=10;
+  this->weight1 = 1.0; this->sigmaX1 = 3.0; this->sigmaY1 = 3.0; this->sigmaZ1 = 3.0;
+  this->weight2 = 0.0; this->sigmaX2 = 3.0; this->sigmaY2 = 3.0; this->sigmaZ2 = 3.0;
+  this->weight3 = 0.0; this->sigmaX3 = 3.0; this->sigmaY3 = 3.0; this->sigmaZ3 = 3.0;
+  this->weight4 = 0.0; this->sigmaX4 = 3.0; this->sigmaY4 = 3.0; this->sigmaZ4 = 3.0;
+  this->Margin = 3;
+  this->GreyLevAlign = 0;
+  this->GLA_Padding_Src=-1.;
+  this->GLA_Padding_Trg=-1.;
+  this->alpha=0.001;
+  this->MaxUpdate = 0.5;
+  strcpy(PrefixOutputs,"Outputs");
+  // Default indicator is MinMod
+  this->indicatorLimiter = 1;
+  this->DeltaX = 1.0;      // To compute the gradient step on the space
+  this->NbChannels=1;
+  
+}
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///destructor
+LogDemons::~LogDemons(void)
+{
+}
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///Read and treat input images
+void LogDemons::ReadAndTreatInputImages(void){
+  int x, y, z;
+  int DistClosestEdge;
+  double mean1,mean2,std1,std2;
+  float PaddingValue;
+  int NbVoxelsOK;
+  
+  //1) BASIC READING STUFFS
+  //1.1) read files
+  this->ImTemplate = new ScalarField[this->NbChannels]; //this->NbChannels is equal to 1 if well initialised
+  this->ImTarget = new ScalarField[this->NbChannels];
+  
+  this->ImTemplate[0].Read(this->SourceImageName);
+  this->ImTarget[0].Read(this->TargetImageName);
+  
+  //1.2) check whether  3D or 2D images are opened
+  if (ImTemplate[0].NT>1) cout << "Source image depends on time!!!";
+  if (ImTarget[0].NT>1) cout << "Target image depends on time!!!";
+  
+  //1.3) check whether source and target images have the same size
+  if ((ImTemplate[0].NX!=ImTarget[0].NX)) cout << "Source and target images do not have the same size!!!";
+  if ((ImTemplate[0].NY!=ImTarget[0].NY)) cout << "Source and target images do not have the same size!!!";
+  if ((ImTemplate[0].NZ!=ImTarget[0].NZ)) cout << "Source and target images do not have the same size!!!";
+  
+  //1.4) variables containing the size of the image
+  this->NX=ImTemplate[0].NX;
+  this->NY=ImTemplate[0].NY;
+  this->NZ=ImTemplate[0].NZ;
+  this->NT=1;
+  
+  cout << "Image size: " << this->NX <<  " , "  <<  this->NY  <<  " , "  << this->NZ  << "\n";
+  
+  
+  //for  (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) InputInitialMomentum.P(-InputInitialMomentum.G(x,y,z)*50.,x,y,z);
+  
+  
+  //2) COMPUTE THE MARGINS
+  if (this->NZ > 1)
+  {
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      DistClosestEdge=z+1;
+      if (y+1<DistClosestEdge) DistClosestEdge=y+1;
+      if (x+1<DistClosestEdge) DistClosestEdge=x+1;
+      if (this->NZ-z<DistClosestEdge) DistClosestEdge=this->NZ-z;
+      if (this->NY-y<DistClosestEdge) DistClosestEdge=this->NY-y;
+      if (this->NX-x<DistClosestEdge) DistClosestEdge=this->NX-x;
+      if (DistClosestEdge<=this->Margin)
+      {
+        this->ImTemplate[0].P(0,x,y,z);
+        this->ImTarget[0].P(0,x,y,z);
+      }
+    }
+  }
+  else
+  {
+    for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      DistClosestEdge=y+1;
+      if (x+1<DistClosestEdge) DistClosestEdge=x+1;
+      if (this->NY-y<DistClosestEdge) DistClosestEdge=this->NY-y;
+      if (this->NX-x<DistClosestEdge) DistClosestEdge=this->NX-x;
+      if (DistClosestEdge<=this->Margin)
+      {
+        this->ImTemplate[0].P(0,x,y,0);
+        this->ImTarget[0].P(0,x,y,0);
+      }
+    }
+  }
+  //3) LINEAR ALIGNMENT OF THE GREY LEVELS OF ImTarget[0] ON THOSE OF ImTemplate[0]
+  PaddingValue=10;
+  
+  if (GreyLevAlign!=0){
+    //compute mean and std dev of the source and target images
+    mean1=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTemplate[0].G(x,y,z)>GLA_Padding_Src){
+      mean1+=(double)this->ImTemplate[0].G(x,y,z);
+      NbVoxelsOK++;
+    }
+    mean1/=(double)(NbVoxelsOK);
+    
+    mean2=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTarget[0].G(x,y,z)>GLA_Padding_Trg){
+      mean2+=(double)this->ImTarget[0].G(x,y,z);
+      NbVoxelsOK++;
+    }
+    mean2/=(double)(NbVoxelsOK);
+    
+    std1=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTemplate[0].G(x,y,z)>GLA_Padding_Src){
+      std1+=pow((double)this->ImTemplate[0].G(x,y,z)-mean1,2.);
+      NbVoxelsOK++;
+    }
+    std1/=(double)(NbVoxelsOK);
+    std1=sqrt(std1);
+    
+    std2=0.;
+    NbVoxelsOK=0;
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) if (this->ImTarget[0].G(x,y,z)>GLA_Padding_Trg){
+      std2+=pow((double)this->ImTarget[0].G(x,y,z)-mean2,2.);
+      NbVoxelsOK++;
+    }
+    std2/=(double)(NbVoxelsOK);
+    std2=sqrt(std2);
+    
+    cout << "Template: mean=" << mean1 << ", stddev=" << std1 << ".    Target: mean=" << mean2 << ", stddev=" << std2 << "\n";
+    
+    
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      this->ImTarget[0].P((this->ImTarget[0].G(x,y,z)-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1,x,y,z);
+    
+    
+    for (z = 0; z < this->NZ; z++)  for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+      if ((this->ImTarget[0].G(x,y,z)<(GLA_Padding_Trg-(float)mean2)*(((float)std1)/((float)std2))+(float)mean1)||(this->ImTarget[0].G(x,y,z)<GLA_Padding_Src))
+        this->ImTarget[0].P(0.,x,y,z);
+    
+  }
+  
+}
+
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///Read and treat input deformation
+void LogDemons::ReadAndTreatInputDeformation(void){
+  int x, y, z;
+  int DistClosestEdge;
+  
+  //1) BASIC READING STUFFS
+  //1.1) read files
+  this->ImTemplate = new ScalarField[this->NbChannels]; //this->NbChannels is equal to 3 if well initialised
+  this->ImTarget =  new ScalarField[this->NbChannels];
+                                         
+  this->ImTemplate[0].Read(this->SourceDefoX);
+  this->ImTemplate[1].Read(this->SourceDefoY);
+  this->ImTemplate[2].Read(this->SourceDefoZ);
+                                         
+                                         
+  this->ImTarget[0].Read(this->TargetDefoX);
+  this->ImTarget[1].Read(this->TargetDefoY);
+  this->ImTarget[2].Read(this->TargetDefoZ);
+  
+  this->NX=ImTarget[0].NX;
+  this->NY=ImTarget[0].NY;
+  this->NZ=ImTarget[0].NZ;
+  this->NT=1;
+  
+  
+  //begin - For tests only
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) ImTemplate[0].P(static_cast<float>(x),x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) ImTemplate[1].P(static_cast<float>(y),x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) ImTemplate[2].P(static_cast<float>(z),x,y,z);
+  
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) this->ImTarget[0].P(static_cast<float>(x),x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) this->ImTarget[1].P(static_cast<float>(y),x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) this->ImTarget[2].P(static_cast<float>(z),x,y,z);
+  for (z=20;z<this->NZ-20;z++) for (y=30;y<this->NY-20;y++) for (x=20;x<21;x++) this->ImTarget[0].P(static_cast<float>(x-0.5),x,y,z);
+  for (z=20;z<this->NZ-20;z++) for (y=30;y<this->NY-20;y++) for (x=21;x<22;x++) this->ImTarget[0].P(static_cast<float>(x-1),x,y,z);
+  for (z=20;z<this->NZ-20;z++) for (y=30;y<this->NY-20;y++) for (x=22;x<23;x++) this->ImTarget[0].P(static_cast<float>(x-1.5),x,y,z);
+  for (z=20;z<this->NZ-20;z++) for (y=30;y<this->NY-20;y++) for (x=24;x<30;x++) this->ImTarget[0].P(static_cast<float>(x-2),x,y,z);
+  //end - For tests only
+  
+  
+  
+  
+  //2) COMPUTE THE MARGINS
+  if (this->NZ > 1)
+  {
+    for (z = 0; z < this->NZ; z++)   for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      DistClosestEdge=z+1;
+      if (y+1<DistClosestEdge) DistClosestEdge=y+1;
+      if (x+1<DistClosestEdge) DistClosestEdge=x+1;
+      if (this->NZ-z<DistClosestEdge) DistClosestEdge=this->NZ-z;
+      if (this->NY-y<DistClosestEdge) DistClosestEdge=this->NY-y;
+      if (this->NX-x<DistClosestEdge) DistClosestEdge=this->NX-x;
+      if (DistClosestEdge<=this->Margin)
+      {
+        this->ImTemplate[0].P(0,x,y,z);
+        this->ImTemplate[1].P(0,x,y,z);
+        this->ImTemplate[2].P(0,x,y,z);
+        this->ImTarget[0].P(0,x,y,z);
+        this->ImTarget[1].P(0,x,y,z);
+        this->ImTarget[2].P(0,x,y,z);
+      }
+    }
+  }
+  else
+  {
+    for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+    {
+      DistClosestEdge=y+1;
+      if (x+1<DistClosestEdge) DistClosestEdge=x+1;
+      if (this->NY-y<DistClosestEdge) DistClosestEdge=this->NY-y;
+      if (this->NX-x<DistClosestEdge) DistClosestEdge=this->NX-x;
+      if (DistClosestEdge<=this->Margin)
+      {
+        this->ImTemplate[0].P(0,x,y);
+        this->ImTemplate[1].P(0,x,y);
+        this->ImTemplate[2].P(0,x,y);
+        this->ImTarget[0].P(0,x,y);
+        this->ImTarget[1].P(0,x,y);
+        this->ImTarget[2].P(0,x,y);
+      }
+    }
+  }
+}
+
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///allocation of all variables used in the program and tune some options
+void LogDemons::AllocateVariablesShooting(void){
+  int i;
+  int x,y,z;
+  
+  
+  // Iteration Number in the flow calculation.
+  this->IterationNumber = NbTimes-1;
+  
+  // distance between two times: there exist NbTime times.
+  this->DeltaTimeSubdiv=1./(static_cast<float>(this->IterationNumber));
+  
+  // InvDiffeo (or Diffeo) is the list of InvDiffeos (or Diffeo) indexed by the time
+  this->InvDiffeo.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimes);
+  this->Diffeo.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimes);
+  
+  // velocity field 
+  this->VelocityField.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // This is the adjoint of the velocity field
+  this->AdjointVectorField.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Adjoint variable associated with the image
+  this->AdjointImage = new ScalarField[this->NbChannels];
+  for (i=0; i<this->NbChannels; i++) 
+    this->AdjointImage[i].CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Variable to store the optimal velocity field
+  this->OptimizedVelocityField.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Current image in the Shooting method
+  this->ShootedImage = new ScalarField[this->NbChannels];
+  for (i=0; i<this->NbChannels; i++) 
+    this->ShootedImage[i].CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  
+  // Gradient of the image
+  this->NablaI.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Gradient of the adjoint of the momentum
+  
+  // Temporary variables
+  this->TempAdImage = new ScalarField[this->NbChannels];
+  for (i=0; i<this->NbChannels; i++) 
+    this->TempAdImage[i].CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  this->TempVectorField.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempDiffeo.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempInvDiffeo.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  // Prepare the temporary variables for the different schemes
+  this->TempInvDiffeoLocal.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempDiffeoLocal.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  
+  // Gradient of the functional 
+  this->GradientVelocityField.CreateVoidField(this->NX,this->NY,this->NZ);
+  this->TempGradient.CreateVoidField(this->NX,this->NY,this->NZ);
+  
+  //initialise diffeo variables to zero
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) TempInvDiffeo.P(static_cast<float>(x),0,x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) TempInvDiffeo.P(static_cast<float>(y),1,x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) TempInvDiffeo.P(static_cast<float>(z),2,x,y,z);
+  
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) TempDiffeo.P(static_cast<float>(x),0,x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) TempDiffeo.P(static_cast<float>(y),1,x,y,z);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) TempDiffeo.P(static_cast<float>(z),2,x,y,z);
+  
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) InvDiffeo.P(static_cast<float>(x),0,x,y,z,0);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) InvDiffeo.P(static_cast<float>(y),1,x,y,z,0);
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++) InvDiffeo.P(static_cast<float>(z),2,x,y,z,0);
+  
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++){
+    Diffeo.P(static_cast<float>(x),0,x,y,z,0); 
+    Diffeo.P(static_cast<float>(x),0,x,y,z,this->IterationNumber);
+  }
+  
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++){
+    Diffeo.P(static_cast<float>(y),1,x,y,z,0); 
+    Diffeo.P(static_cast<float>(y),1,x,y,z,this->IterationNumber);
+  }
+  
+  for (z=0;z<this->NZ;z++) for (y=0;y<this->NY;y++) for (x=0;x<this->NX;x++){
+    Diffeo.P(static_cast<float>(z),2,x,y,z,0); 
+    Diffeo.P(static_cast<float>(z),2,x,y,z,this->IterationNumber);
+  }
+  
+  
+  
+  // Initiate the class to filter the velocity field
+  FFTconvolver.InitiateConvolver(this->NX,this->NY,this->NZ,this->weight1,this->sigmaX1,this->sigmaY1,this->sigmaZ1,this->weight2,this->sigmaX2,this->sigmaY2,this->sigmaZ2,this->weight3,this->sigmaX3,this->sigmaY3,this->sigmaZ3,this->weight4,this->sigmaX4,this->sigmaY4,this->sigmaZ4);
+  
+  // choose the spatial scheme: default: UpWind, 1: MinMod, 2: SuperBee
+  switch(this->indicatorLimiter)
+  {
+    case 0 :
+      this->Limiter = this->UpWindLimiter;
+      cout << "Shooting using UpWindLimiter" <<"\n";
+      break;
+    case 2 :
+      this->Limiter = this->SuperBeeLimiter;
+      cout << "Shooting using SuperBeeLimiter" <<"\n";
+      break;
+    default :
+      this->Limiter = this->MinModLimiter;
+      cout << "Shooting using MinModLimiter" <<"\n";
+      break;
+  }
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Implements the advection scheme on the inverse of the diffeomorphism and the Euler scheme on the diffeomorphism
+void LogDemons::SchemeSolve(void)
+{
+	int j,x,y,z;
+	float temp,deltaBB,deltaB,deltaF,deltaFF,eta;
+	float maxEta = 0.0;
+  
+  
+  this->TempInvDiffeoLocal.PutToAllVoxels(0.0);
+  this->TempDiffeoLocal.PutToAllVoxels(0.0);
+	
+  
+  for (j=0;j<3;j++)
+	{
+		for (z = 2; z < this->NZ-2; z++) for (y = 2; y < this->NY-2; y++) for (x = 2; x < this->NX-2; x++)
+		{
+			temp=0.0;
+      
+			/// Computation on the first dimension of the scheme.
+			eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(0,x,y,z);
+			if (abs(eta)>maxEta){maxEta = abs(eta);}
+			deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x-1,y,z));
+			deltaF = (this->TempInvDiffeo.G(j,x+1,y,z) - this->TempInvDiffeo.G(j,x,y,z));
+			if (eta>=0.0)
+			{
+				deltaBB = (this->TempInvDiffeo.G(j,x-1,y,z) - this->TempInvDiffeo.G(j,x-2,y,z));
+				temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+			}
+			else
+			{
+				deltaFF = (this->TempInvDiffeo.G(j,x+2,y,z) - this->TempInvDiffeo.G(j,x+1,y,z));				
+				temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+			}
+      
+			/// Computation on the second dimension of the scheme.
+			eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(1,x,y,z);
+			if (abs(eta)>maxEta){maxEta = abs(eta);}
+			deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x,y-1,z));
+			deltaF = (this->TempInvDiffeo.G(j,x,y+1,z) - this->TempInvDiffeo.G(j,x,y,z));
+			if (eta>=0.0)
+			{
+				deltaBB = (this->TempInvDiffeo.G(j,x,y-1,z) - this->TempInvDiffeo.G(j,x,y-2,z));
+				temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+			}
+			else
+			{
+				deltaFF = (this->TempInvDiffeo.G(j,x,y+2,z) - this->TempInvDiffeo.G(j,x,y+1,z));				
+				temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+			}
+      
+			/// Computation on the third dimension of the scheme.
+			eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(2,x,y,z);
+			if (abs(eta)>maxEta){maxEta = abs(eta);}
+			deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x,y,z-1));
+			deltaF = (this->TempInvDiffeo.G(j,x,y,z+1) - this->TempInvDiffeo.G(j,x,y,z));
+			if (eta>=0.0)
+			{
+				deltaBB = (this->TempInvDiffeo.G(j,x,y,z-1) - this->TempInvDiffeo.G(j,x,y,z-2));
+				temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+			}
+			else
+			{
+				deltaFF = (this->TempInvDiffeo.G(j,x,y,z+2) - this->TempInvDiffeo.G(j,x,y,z+1));				
+				temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+			}
+			this->TempInvDiffeoLocal.P(temp,j,x,y,z);
+		}
+	}
+	if (this->NZ==1)
+	{
+		z=0;
+		for (j=0;j<2;j++)
+		{
+			for (y = 2; y < this->NY-2; y++) for (x = 2; x < this->NX-2; x++)
+			{
+				temp=0.0;
+        
+				/// Computation on the first dimension of the scheme.
+				eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(0,x,y,z);
+				if (abs(eta)>maxEta){maxEta = abs(eta);}
+				deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x-1,y,z));
+				deltaF = (this->TempInvDiffeo.G(j,x+1,y,z) - this->TempInvDiffeo.G(j,x,y,z));
+				if (eta>=0.0)
+				{
+					deltaBB = (this->TempInvDiffeo.G(j,x-1,y,z) - this->TempInvDiffeo.G(j,x-2,y,z));
+					temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+				}
+				else
+				{
+					deltaFF = (this->TempInvDiffeo.G(j,x+2,y,z) - this->TempInvDiffeo.G(j,x+1,y,z));				
+					temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+				}
+        
+				/// Computation on the second dimension of the scheme.
+				eta = this->DeltaTimeSubdiv / this->DeltaX * this->VelocityField.G(1,x,y,z);
+				if (abs(eta)>maxEta){maxEta = abs(eta);}
+				deltaB = (this->TempInvDiffeo.G(j,x,y,z) - this->TempInvDiffeo.G(j,x,y-1,z));
+				deltaF = (this->TempInvDiffeo.G(j,x,y+1,z) - this->TempInvDiffeo.G(j,x,y,z));
+				if (eta>=0.0)
+				{
+					deltaBB = (this->TempInvDiffeo.G(j,x,y-1,z) - this->TempInvDiffeo.G(j,x,y-2,z));
+					temp += -eta * (deltaB + 0.5 * (1.0 - eta) * (this->Limiter(deltaB,deltaF) - this->Limiter(deltaBB,deltaB)));
+				}
+				else
+				{
+					deltaFF = (this->TempInvDiffeo.G(j,x,y+2,z) - this->TempInvDiffeo.G(j,x,y+1,z));				
+					temp += eta * (-deltaF + 0.5 * (1.0 + eta) * (this->Limiter(deltaFF,deltaF) - this->Limiter(deltaF,deltaB)));
+				}
+				this->TempInvDiffeoLocal.P(temp,j,x,y,z);
+			}
+		}
+	}
+  
+	for (j=0;j<3;j++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+	{
+		this->TempInvDiffeo.Add(this->TempInvDiffeoLocal.G(j,x,y,z),j,x,y,z);
+		this->TempDiffeoLocal.P(this->VelocityField.G(j,this->TempDiffeo.G(0,x,y,z),this->TempDiffeo.G(1,x,y,z),this->TempDiffeo.G(2,x,y,z)),j,x,y,z);	
+	}
+  
+	for (j=0;j<3;j++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+	{
+		this->TempDiffeo.Add(TempDiffeoLocal.G(j,x,y,z) * this->DeltaTimeSubdiv,j,x,y,z);
+	}
+  
+	if (maxEta>1){ cout << " CFL condition not satisfied  :   " << maxEta <<" > 1" <<"\n"; }
+}
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Compute the velocity field with arguments
+void LogDemons::SmoothTempGradVeloField(VectorField * tempGradient)
+{	
+	float temp;
+	int i,x,y,z;
+	for (i=0;i<3;i++)
+	{
+		for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+		{
+			temp = tempGradient->G(i,x,y,z);
+			this->FFTconvolver.P(static_cast<float>(temp),x,y,z);
+		}
+		FFTconvolver.Convolution();
+		for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+		{
+			this->GradientVelocityField.P(FFTconvolver.G(x,y,z),i,x,y,z);
+		}
+	}
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Compute the adjoint of the constant vector field (adjoint that varies w.r.t. the time (Nbtimes) variable)
+void LogDemons::ComputeAdjointVectorField(void)
+{
+	float temp;
+	int i,x,y,z;
+	for (i=0;i<3;i++)
+	{
+		for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++)
+		{
+			temp =  this->TempAdImage[0].G(x,y,z)* this->NablaI.G(i,x,y,z);
+			this->AdjointVectorField.P(temp,i,x,y,z);
+		}
+	}
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Implementation of SuperBee Limiter
+float LogDemons::SuperBeeLimiter(float a, float b)
+{
+	float temp1,temp2,result;
+	temp1 = MinModLimiter(a,2*b);
+	temp2 = MinModLimiter(2*a,b);
+	if (a<b){result=b;}
+	else {result=a;}
+	return result;
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Run the shooting from a steady velocity field
+void LogDemons::Shooting(void)
+{   
+	this->InitializeShootingVariables();
+	this->Cost=0.0;
+	int k;
+	this->SchemeSolve();
+  
+	/// Compute the gradient of the norm w.r.t the initial momentum 
+	DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,1);
+	DeepCopy(&this->TempDiffeo,&this->Diffeo,1);
+	for (k=1;k<this->IterationNumber;k++)
+	{
+		this->SchemeSolve();
+		DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+		DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+	}
+  
+	///add the similiraty measure to the cost 
+	this->Cost += this->SimilarityMeasure();
+	cout << this->Cost  << " Similarity Measure "<<"\n";
+	//cout << this->Cost  << " Global Cost "<<"\n";
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Perform the gradient descent
+void LogDemons::GradientDescent(int Niter, float gradientStep)
+{	
+	float temp;
+	int localCounter = 0;
+	float optimizedCost;
+	float currentCost;
+	int i;
+  float MaxVectorField;
+  
+	for (i=0;i<Niter;i++){
+		
+    
+    //1) compute the shooting gradient
+    cout <<"		Gradient Iteration Number "<<i+1<<"\n";
+		this->CptShootingGradient();
+    
+    if (i==0){// to avoid GetUpperBound
+      currentCost=this->Cost+1;
+      optimizedCost=this->Cost+1;
+    }
+    
+    
+    //2) Copy VelocityField to OptimizedVelocityField if it improves the cost / reduce the step size otherwise
+		if (this->Cost<currentCost){
+			if (this->Cost < optimizedCost){
+				//cout <<"Global Cost Decreasing "<<i+1<<"\n";
+				DeepCopy(&this->VelocityField,&this->OptimizedVelocityField,0);
+				optimizedCost = this->Cost;
+				localCounter = 0;
+			}
+		}
+    else{
+			//cout <<"Global Cost Increasing "<<i+1<<"\n";
+			localCounter++;
+			if (localCounter==2){
+				gradientStep *= 0.8;
+				localCounter = 0;
+			}
+			//cout << "  Local Counter " << localCounter << " and Gradient Step "<< gradientStep <<"\n";
+		}
+    
+		currentCost = this->Cost;
+    
+    //update the velocity field VelocityField
+    MaxVectorField = this->GradientVelocityField.GetMaxAbsVal();
+		
+    if(MaxVectorField>this->MaxUpdate) temp = this->MaxUpdate/MaxVectorField;
+		else temp=1.0;
+    
+		AddVectorField(&this->GradientVelocityField,&this->VelocityField,-temp*gradientStep);
+	}
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Compute the gradient of the shooting w.r.t. the steady velocity field
+void LogDemons::CptShootingGradient(void)
+{
+	int k,i;
+  
+	this->Shooting();
+	
+  this->InitializeAdjointVariables();
+	
+  for (k=0;k<this->IterationNumber;k++){
+    for (i=0;i<this->NbChannels;i++){
+			TransportMomentum(&this->AdjointImage[i],&this->InvDiffeo,&this->TempAdImage[i],this->DeltaX,k);
+      TransportImage(&this->ImTemplate[i], &this->InvDiffeo, &this->ShootedImage[i],k);
+      Cpt_Grad_ScalarField(&this->ShootedImage[i],&this->NablaI,0,this->DeltaX);
+      this->ComputeAdjointVectorField();
+      AddVectorField(&this->AdjointVectorField,&this->TempGradient,this->DeltaTimeSubdiv);
+    }
+	}
+
+	this->SmoothTempGradVeloField(&this->TempGradient);
+	AddVectorField(&this->VelocityField,&this->GradientVelocityField,this->alpha);
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Initialize the adjoint variables to do when computing the gradient
+void LogDemons::InitializeAdjointVariables(void){
+	int x,y,z;
+  int i;
+	
+  // Initialise the adjoint variable of the image or of the diffeo
+  for (i=0;i<this->NbChannels;i++){
+		for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+			this->TempAdImage[i].P(this->ImTarget[i].G(x,y,z) - this->ShootedImage[i].G(x,y,z),x,y,z);
+			this->AdjointImage[i].P(0.0,x,y,z);
+		}
+	  TransportMomentum(&this->TempAdImage[i],&this->Diffeo,&this->AdjointImage[i],this->DeltaX,this->IterationNumber);
+  }
+  
+	// Initialise the gradient velocity field
+	this->GradientVelocityField.PutToAllVoxels(0.0);
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Initialize the temporary diffeomorphisms for the shooting
+void LogDemons::InitializeShootingVariables(void)
+{
+	int x,y,z;
+	for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) TempInvDiffeo.P(static_cast<float>(x),0,x,y,z);
+	for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) TempInvDiffeo.P(static_cast<float>(y),1,x,y,z);
+	for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) TempInvDiffeo.P(static_cast<float>(z),2,x,y,z);
+	
+  for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) TempDiffeo.P(static_cast<float>(x),0,x,y,z);
+	for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) TempDiffeo.P(static_cast<float>(y),1,x,y,z);
+	for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++) TempDiffeo.P(static_cast<float>(z),2,x,y,z);
+}
+
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Compute the sum of square of the difference (can be replaced with CalcSqrtSumOfSquaredDif )
+float LogDemons::SimilarityMeasure()
+{
+	float result = 0.0;
+	int x,y,z;
+  int i;
+  
+  for (i=0;i<this->NbChannels;i++) for (z = 0; z < this->NZ; z++) for (y = 0; y < this->NY; y++) for (x = 0; x < this->NX; x++){
+    result += pow((double)(this->ShootedImage[i].G(x,y,z) - this->ImTarget[i].G(x,y,z)),2);
+  }
+	
+  return 0.5*result;
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Save the results
+void LogDemons::SaveResult(void)
+{
+	char Output_Initial_VectorFieldX[256];
+	char Output_Initial_VectorFieldY[256];
+	char Output_Initial_VectorFieldZ[256];
+  char FileName[256];
+  int k,i;
+  ScalarField OutputImage;
+  
+	
+	//save the correponding velocity vector field 
+	strcpy(Output_Initial_VectorFieldX,this->PrefixOutputs);
+	strcat(Output_Initial_VectorFieldX,"_VelocityField_X.nii");
+	strcpy(Output_Initial_VectorFieldY,this->PrefixOutputs);
+	strcat(Output_Initial_VectorFieldY,"_VelocityField_Y.nii");
+	strcpy(Output_Initial_VectorFieldZ,this->PrefixOutputs);
+	strcat(Output_Initial_VectorFieldZ,"_VelocityField_Z.nii");
+  
+  this->OptimizedVelocityField.Write(Output_Initial_VectorFieldX,Output_Initial_VectorFieldY,Output_Initial_VectorFieldZ);
+  
+  
+  //compute the deformations
+  OutputImage.CreateVoidField(this->NX,this->NY,this->NZ,this->NbTimes);
+  
+  if (this->NbChannels==1){
+    this->InitializeShootingVariables();
+    DeepCopy(&this->ImTemplate[0],&OutputImage,0);
+    
+    for (k=0;k<this->IterationNumber;k++)
+    {	
+      this->SchemeSolve();
+      TransportImage(&this->ImTemplate[0], &this->TempInvDiffeo, &this->ShootedImage[0]);
+      DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+      DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+      DeepCopy(&this->ShootedImage[0],&OutputImage,k+1);
+    }
+    
+    //save the deformations
+    strcpy(FileName,this->PrefixOutputs);
+    strcat(FileName,"_Deformation.nii");
+    OutputImage.Write(FileName,this->SourceImageName);
+  }
+
+  if (this->NbChannels==3){
+    for (i=0;i<this->NbChannels;i++){
+      this->InitializeShootingVariables();
+      DeepCopy(&this->ImTemplate[i],&OutputImage,0);
+      
+      for (k=0;k<this->IterationNumber;k++)
+      {	
+        this->SchemeSolve();
+        TransportImage(&this->ImTemplate[i], &this->TempInvDiffeo, &this->ShootedImage[i]);
+        DeepCopy(&this->TempInvDiffeo,&this->InvDiffeo,k+1);
+        DeepCopy(&this->TempDiffeo,&this->Diffeo,k+1);
+        DeepCopy(&this->ShootedImage[i],&OutputImage,k+1);
+      }
+      
+      //save the deformations
+      strcpy(FileName,this->PrefixOutputs);
+      if (i==0) strcat(FileName,"_DeformationX.nii");
+      if (i==1) strcat(FileName,"_DeformationY.nii");
+      if (i==2) strcat(FileName,"_DeformationZ.nii");
+      OutputImage.Write(FileName,this->SourceDefoX);
+    }
+  }
+  
+
+
+
+}
+
+
+///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+/// Run the registration
+void LogDemons::Run(void)
+{
+  //read data and allocate variables
+	if (this->IndicatorDiffeoTarget==0)
+    this->ReadAndTreatInputImages();
+  else
+    this->ReadAndTreatInputDeformation();
+  
+	this->AllocateVariablesShooting();
+	
+  //perform the gradient descent
+  this->GradientDescent(this->NbIter,this->MaxUpdate);
+	
+  //save the results
+  this->SaveResult();
+}
+
+
+

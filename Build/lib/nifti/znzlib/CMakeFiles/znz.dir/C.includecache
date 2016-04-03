@@ -1,0 +1,26 @@
+#IncludeRegexLine: ^[ 	]*#[ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/home/lrisser/Softwares/TV2016/lib/nifti/znzlib/config.h
+
+/home/lrisser/Softwares/TV2016/lib/nifti/znzlib/znzlib.c
+znzlib.h
+/home/lrisser/Softwares/TV2016/lib/nifti/znzlib/znzlib.h
+
+/home/lrisser/Softwares/TV2016/lib/nifti/znzlib/znzlib.h
+stdio.h
+-
+stdlib.h
+-
+string.h
+-
+stdarg.h
+-
+config.h
+/home/lrisser/Softwares/TV2016/lib/nifti/znzlib/config.h
+

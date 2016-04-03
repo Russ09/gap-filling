@@ -1,0 +1,21 @@
+IF(NOT APPLE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fopenmp")  #FOR OPENMP
+ENDIF(NOT APPLE)
+
+
+add_library (Demons           Demons.cc) 
+add_library (PW_Demons        PW_Demons.cc) 
+add_library (HC_Demons        HC_Demons.cc) 
+add_library (LogDemonsFX      LogDemonsFX.cc) 
+add_library (LDDMM_Plain      LDDMM_Plain.cc)
+add_library (LIDM             LIDM.cc)
+add_library (DMM              DMM.cc)
+add_library (LDDMM_Disc       LDDMM_Disc.cc)
+add_library (LDDMM_FX_Disc    LDDMM_FX_Disc.cc)
+add_library (LDDMM_Splines    LDDMM_Splines.cc)
+add_library (LDDMM_Beg        LDDMM_Beg.cc)
+add_library (LeftInvariantDM  LeftInvariantDM.cc)
+add_library (GeoShoot         GeoShoot.cc)
+add_library (DiscontinuousReg DiscontinuousReg.cc)
+add_library (Metamorphosis    Metamorphosis.cc)
+add_library (SciCalcPack      SciCalcPack.cc)

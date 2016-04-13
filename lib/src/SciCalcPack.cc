@@ -13842,6 +13842,21 @@ float pythag(float a, float b){
   else return (absb == 0.0 ? 0.0 : absb*sqrt(1.0+(absa/absb)*(absa/absb)));
 }
 
+///Generate a random number following a normal distribution
+float sampleNormal(){
+  double u,v,r,c;
+  u = 2.0 * static_cast<double>(rand()) / (RAND_MAX) - 1;
+  v = 2.0 * static_cast<double>(rand()) / (RAND_MAX) - 1;
+  r = u * u + v * v;
+  if (r <0.01 || r > 0.99) return sampleNormal();
+  c = sqrt(-2 * log(r) / r);
+  return static_cast<float>(u * c);
+  }
+
+///Generate a random number following an uniform distribution  (in [0,1])
+float sampleUniform(){
+  return static_cast<float>(rand())/static_cast<float>(RAND_MAX);
+  }
 
 ///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ///                                            8: LANDMARKS

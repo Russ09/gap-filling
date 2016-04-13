@@ -36,6 +36,7 @@ using namespace std;
 #include <limits>
 #include <ctime>
 
+
 // C header files
 #include <stdio.h>
 #include <stdlib.h>
@@ -1488,7 +1489,11 @@ inline float nr_MAX(const float &a, const float &b){
   return b > a ? (b) : (a);
   }
 
+///Generate a random number following a normal distribution  (mean=0 std=1)
+float sampleNormal();
 
+///Generate a random number following an uniform distribution  (in [0,1])
+float sampleUniform();
 
 
 ///++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

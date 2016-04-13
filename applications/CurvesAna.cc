@@ -37,7 +37,7 @@ protected:
   virtual void CptSaliencyMap();
   virtual void FillTheGaps();
   virtual void TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float LengthPathSteps=1, float ConsideredGLThresh=0.05, float NoiseLevel=0);
-  virtual void TestNoisyPaths(int,int *, int *,int *);
+  virtual void TestNoisyPaths(int,int *, int *,int *,float);
   virtual void IdentifyAndValidateSegmentAndElement(int,int,int *,int *,int);
   virtual void IdentifyAndValidateSegmentEnd(int,int,int,int *);
   virtual int  CreatePath(int,int,int,int,int,int);
@@ -769,12 +769,11 @@ void TensorVoting2::CptSaliencyMap(){
 
 #endif
 
-//From a point [IniX,IniY,IniZ]  (set to -2) and in the initial direction [DirecX,DirecY,DirecZ], we follow a path made of local maxima in this->Functional
-//as long as its value is above 'ValFoncMin'.
-//remarks : * 'DirecX', 'DirecY' and'DirecZ' must be in [-1,1]
-//          * 'TargetType' is -1 if nothing is found / 1 if a segment end is found / 2 if a segment is found
-//          * LengthPathSteps  not be higher than 1 -- In our tests, 1 seems to give optimal results (probably due to the fact that the path should be sufficiently far away from the origin after a few steps
-//          * ConsideredGLThresh... when defining a path, this search is stopped if reaching this value in the functional
+
+//From a segment-end 'IdSegEnd' different optimal paths of local maxima 
+//  -> 'TargetType' is -1 if nothing is found / 1 if a segment end is found / 2 if a segment is found
+//  -> LengthPathSteps  not be higher than 1 -- In our tests, 1 seems to give optimal results (probably due to the fact that the path should be sufficiently far away from the origin after a few steps
+//  -> ConsideredGLThresh... when defining a path, this search is stopped if reaching this value in the functional
 void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float LengthPathSteps, float ConsideredGLThresh,float NoiseLevel){
     float locX,locY,locZ;
     int TXi,TYi,TZi;
@@ -797,6 +796,8 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
     int LXi,LYi,LZi;
     int IniLabel;
     float frandmax;
+    float rand1,rand2,rand3;
+    float u,v,r,c;
     
     frandmax=static_cast<float>(RAND_MAX);
     
@@ -805,17 +806,17 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
         IniX=this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],0);
         IniY=this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],0);
         IniZ=this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],0);
-        CurrentDirection[0]=this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],0)-this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],3);
-        CurrentDirection[1]=this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],0)-this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],3);
-        CurrentDirection[2]=this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],0)-this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],3);
+        CurrentDirection[0]=this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],0)-this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],1);
+        CurrentDirection[1]=this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],0)-this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],1);
+        CurrentDirection[2]=this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],0)-this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],1);
     }
     else{   // last element of the segment
         IniX=this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1);
         IniY=this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1);
         IniZ=this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1);
-        CurrentDirection[0]=this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1)-this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-4);
-        CurrentDirection[1]=this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1)-this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-4);
-        CurrentDirection[2]=this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1)-this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-4);
+        CurrentDirection[0]=this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1)-this->Network->GetX(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-2);
+        CurrentDirection[1]=this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1)-this->Network->GetY(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-2);
+        CurrentDirection[2]=this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1)-this->Network->GetZ(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-2);
     }
     
     VecNormalize(CurrentDirection,1);
@@ -922,26 +923,41 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
                     
                     //2.2.2.4) measure the score of the tested point if eligible
                     if (EligiblePoint==1){
+                        //rand1=NoiseLevel*(sampleUniform()-0.5);
+                        //rand2=NoiseLevel*(sampleUniform()-0.5);
+                        //rand3=NoiseLevel*(sampleUniform()-0.5);
+                        if (IterationsNumber>=7){
+                          rand1=NoiseLevel*sampleNormal();
+                          rand2=NoiseLevel*sampleNormal();
+                          rand3=NoiseLevel*sampleNormal();
+                        }
+                        else{
+                          rand1=0;
+                          rand2=0;
+                          rand3=0;
+                        }
+                        
+                        
                         if (ValFoncTop<0){
                             ValFoncTop=this->Functional.G(TXf,TYf,TZf);
                             if (ValFoncTop<this->EnhancementField.G(TXf,TYf,TZf))
                                 ValFoncTop=this->EnhancementField.G(TXf,TYf,TZf);
                                 
-                            TopTestedDirection[0]=TestedDirection[0]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);
-                            TopTestedDirection[1]=TestedDirection[1]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);  //expression of the noise (null by default) here
-                            TopTestedDirection[2]=TestedDirection[2]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);
+                            TopTestedDirection[0]=TestedDirection[0]+rand1;
+                            TopTestedDirection[1]=TestedDirection[1]+rand2;  //expression of the noise (null by default) here
+                            TopTestedDirection[2]=TestedDirection[2]+rand3;
                         }
                         if (ValFoncTop<this->EnhancementField.G(TXf,TYf,TZf)){
                             ValFoncTop=this->EnhancementField.G(TXf,TYf,TZf);
-                            TopTestedDirection[0]=TestedDirection[0]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);
-                            TopTestedDirection[1]=TestedDirection[1]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);  //expression of the noise (null by default) here
-                            TopTestedDirection[2]=TestedDirection[2]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);
+                            TopTestedDirection[0]=TestedDirection[0]+rand1;
+                            TopTestedDirection[1]=TestedDirection[1]+rand2;  //expression of the noise (null by default) here
+                            TopTestedDirection[2]=TestedDirection[2]+rand3;
                         }
                         if (ValFoncTop<this->Functional.G(TXf,TYf,TZf)){
                             ValFoncTop=this->Functional.G(TXf,TYf,TZf);
-                            TopTestedDirection[0]=TestedDirection[0]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);
-                            TopTestedDirection[1]=TestedDirection[1]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);  //expression of the noise (null by default) here
-                            TopTestedDirection[2]=TestedDirection[2]+NoiseLevel*((static_cast<float>(rand())/frandmax)-0.5);
+                            TopTestedDirection[0]=TestedDirection[0]+rand1;
+                            TopTestedDirection[1]=TestedDirection[1]+rand2;  //expression of the noise (null by default) here
+                            TopTestedDirection[2]=TestedDirection[2]+rand3;
                         }
                     }
                 }
@@ -972,12 +988,11 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
 
 
 //Robust version of 'TestPath' where several noisy paths are tested and not a single deterministic one.
-//From a point [IniX,IniY,IniZ]  (set to -2) and in the initial direction [DirecX,DirecY,DirecZ], we follow different 
-//paths of local maxima in this->Functional as long as its value is above 'ValFoncMin'. Contrary to 'TestPath' the
-//tested paths are noisy
-//remarks : * 'DirecX', 'DirecY' and'DirecZ' must be in [-1,1]
-//          * 'TargetType' is -1 if nothing is found / 1 if a segment end is found / 2 if a segment is found
-void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength){
+//From a segment-end 'IdSegEnd' different optimal paths of local maxima
+//Contrary to 'TestPath' the tested paths are noisy
+//-> 'TargetType' is -1 if nothing is found / 1 if a segment end is found / 2 if a segment is found
+//-> The std dev of the Gaussian noise on the path is 'PropNoise' times the length of the path steps
+void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float PropNoise){
   float ConsideredGLThresh;
   float LengthPathSteps;
   float NoiseLevel;
@@ -989,12 +1004,17 @@ void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target,
   int Tst_ID_target;
   int Tst_PathLength;
   int i;
+  int EligiblePath;
+  float D1[3];
+  float D2[3];
+  float diam1,diam2;
+  int IdReachedSegEnd;
   
   //1) general parameters
   ConsideredGLThresh=0.05;   //when defining a path, this search is stopped if reaching this value in the functional
   LengthPathSteps=1;         // should not be higher than 1 -- In our tests, 1 seems to give optimal results (probably due to the fact that the path should be sufficiently far away from the origin after a few steps)
-  NoiseLevel=LengthPathSteps*0.1;
-  NbPathsToTest=20;
+  NoiseLevel=LengthPathSteps*PropNoise;
+  NbPathsToTest=50;
 
   //2) test different paths
   Best_PathLength=-1;
@@ -1005,16 +1025,49 @@ void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target,
     this->TestPath(IdSegEnd,&Tst_TargetType,&Tst_ID_target,&Tst_PathLength,LengthPathSteps,ConsideredGLThresh,NoiseLevel);
     
     if ((Tst_TargetType==1)||(Tst_TargetType==2)){ //something is reached
-      if (Best_PathLength=-1){ //no optimal path yet
-        Best_TargetType=Tst_TargetType;
-        Best_ID_target=Tst_ID_target;
-        Best_PathLength=Tst_PathLength;
-        for (i=0;i<this->MaxPathLength;i++) this->TmpPath[i][0]=this->Path[i][0];
-        for (i=0;i<this->MaxPathLength;i++) this->TmpPath[i][1]=this->Path[i][1];
-        for (i=0;i<this->MaxPathLength;i++) this->TmpPath[i][2]=this->Path[i][2];
+      if ((Best_PathLength==-1)||(Best_PathLength>Tst_PathLength)){ //no optimal path yet or shorter than the optimal path
+        //Additional tests here to check whether the path is eligible...
+        EligiblePath=1;
+        
+        IdReachedSegEnd=Tst_ID_target-100000000;
+        
+        //... angle between the path and the reached segment end is not too large
+        if (Tst_TargetType==1){
+          D1[0]=this->Path[Tst_PathLength-1][0]-this->Path[Tst_PathLength-4][0];
+          D1[1]=this->Path[Tst_PathLength-1][1]-this->Path[Tst_PathLength-4][1];
+          D1[2]=this->Path[Tst_PathLength-1][2]-this->Path[Tst_PathLength-4][2];
+          
+          
+          
+          if (this->ListSegmentEnds[IdReachedSegEnd][1]==0){
+            D2[0]=this->Network->GetX(this->ListSegmentEnds[IdReachedSegEnd][0],0)-this->Network->GetX(this->ListSegmentEnds[IdReachedSegEnd][0],3);
+            D2[1]=this->Network->GetY(this->ListSegmentEnds[IdReachedSegEnd][0],0)-this->Network->GetY(this->ListSegmentEnds[IdReachedSegEnd][0],3);
+            D2[2]=this->Network->GetZ(this->ListSegmentEnds[IdReachedSegEnd][0],0)-this->Network->GetZ(this->ListSegmentEnds[IdReachedSegEnd][0],3);
+          }
+          else{
+            D2[0]=this->Network->GetX(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-1)-this->Network->GetX(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-4);
+            D2[1]=this->Network->GetY(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-1)-this->Network->GetY(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-4);
+            D2[2]=this->Network->GetZ(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-1)-this->Network->GetZ(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-4);
+          }
+          
+          VecNormalize(D1,1);
+          VecNormalize(D2,1);
+          if (scalarProd_3vec(D1,D2)>-0.5) EligiblePath=0;   //-0.5 -> angle = Pi/6    --   -0.707 -> angle = Pi/4
         }
-      else{ //there is already a saved optimal path
-        if (Best_PathLength>Tst_PathLength){ //test on the total path length (change with another measure???)
+        
+        //... diameters should not be too different
+        if (Tst_TargetType==1){
+          if (this->ListSegmentEnds[IdSegEnd][1]==0) diam1=this->Network->GetD(this->ListSegmentEnds[IdSegEnd][0],0);
+          else                                       diam1=this->Network->GetD(this->ListSegmentEnds[IdSegEnd][0],this->ListSegmentEnds[IdSegEnd][1]-1);
+          
+          if (this->ListSegmentEnds[IdReachedSegEnd][1]==0) diam2=this->Network->GetD(this->ListSegmentEnds[IdReachedSegEnd][0],0);
+          else                                              diam2=this->Network->GetD(this->ListSegmentEnds[IdReachedSegEnd][0],this->ListSegmentEnds[IdReachedSegEnd][1]-1);
+          
+          if (diam2<0.33*diam1) EligiblePath=0;
+          if (diam2>3*diam1)    EligiblePath=0;
+          }
+        
+        if (EligiblePath==1){
           Best_TargetType=Tst_TargetType;
           Best_ID_target=Tst_ID_target;
           Best_PathLength=Tst_PathLength;
@@ -1273,7 +1326,7 @@ void TensorVoting2::FillTheGaps(){
       //test a path  (the path is stored in this->Path)
       TargetType=-1;
       //this->TestPath(i,&TargetType,&TargetId,&PathLength);           //to comment for the noisy version of the algorithm
-      this->TestNoisyPaths(i,&TargetType,&TargetId,&PathLength);     //to uncomment for the noisy version of the algorithm
+      this->TestNoisyPaths(i,&TargetType,&TargetId,&PathLength,0.2);     //to uncomment for the noisy version of the algorithm
       
       //a segment end is reached
       if (TargetType==1){
@@ -1399,1737 +1452,10 @@ void TensorVoting2::PerformTensorVoting2(LDMK_Curves * InputNetwork, LDMK_Points
 
 
 
-/*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-                             Functions level 2   - related to the 2009 tensor voting
- ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
-
-
-typedef struct
-{
-    int NbSeg;       //segments number in the lineset
-    int *NbEl;       //elements number in each segment. If NbEl[i]=0 then nothing is allocated for segment i
-    double **x;      //x[i][j] x-axis of segment j / element i
-    double **y;      //y[i][j] y-axis of segment j / element i
-    double **z;      //z[i][j] z-axis of segment j / element i
-    double **d;      //d[i][j] diameter of segment j / element i
-} Lineset;
-
-
-typedef struct
-{
-    float ***image;  // the image
-    int NBZ;                 // |
-    int NBY;                 // |-> its dimension
-    int NBX;                 // |
-} Image3Dfloat;
-
-
-// Field[0][0] = sum v_x^2   / Field[0][1] = sum v_x v_y / Field[0][2] = sum v_x v_z
-// Field[1][0] = sum v_y v_x / Field[1][1] = sum v_y^2   / Field[1][2] = sum v_y v_z
-// Field[2][0] = sum v_z v_x / Field[2][1] = sum v_z v_y / Field[2][2] = sum v_z^2
-typedef struct
-{
-    Image3Dfloat Field[3][3];
-    Image3Dfloat Functional;
-    Image3Dfloat EnhancementField;
-    int *** NetworkLabels;
-    int NBZ;
-    int NBY;
-    int NBX;
-} TensorField4TV;
-
-
-
-//convert voxels -> mm
-void Lineset_VoxelsToMillimeters(Lineset * Network,ScalarField * RefSF){
-  int i,j;
-  float x_new,y_new,z_new;
-  float x_mm,y_mm,z_mm,vox_mm,three;
-  
-  three=3;
-  
-  x_mm=sqrt(RefSF->Image2World[0][0]*RefSF->Image2World[0][0]+RefSF->Image2World[0][1]*RefSF->Image2World[0][1]+RefSF->Image2World[0][2]*RefSF->Image2World[0][2]);
-  y_mm=sqrt(RefSF->Image2World[1][0]*RefSF->Image2World[1][0]+RefSF->Image2World[1][1]*RefSF->Image2World[1][1]+RefSF->Image2World[1][2]*RefSF->Image2World[1][2]);
-  z_mm=sqrt(RefSF->Image2World[2][0]*RefSF->Image2World[2][0]+RefSF->Image2World[2][1]*RefSF->Image2World[2][1]+RefSF->Image2World[2][2]*RefSF->Image2World[2][2]);
-  vox_mm=(x_mm+y_mm+z_mm)/three;
-  
-  for (i=0;i<2*Network->NbSeg;i++) if (Network->NbEl[i]!=0) for (j=0;j<Network->NbEl[i];j++){
-    x_new=Network->x[i][j]*RefSF->Image2World[0][0]+Network->y[i][j]*RefSF->Image2World[0][1]+Network->z[i][j]*RefSF->Image2World[0][2]+RefSF->Image2World[0][3];
-    y_new=Network->x[i][j]*RefSF->Image2World[1][0]+Network->y[i][j]*RefSF->Image2World[1][1]+Network->z[i][j]*RefSF->Image2World[1][2]+RefSF->Image2World[1][3];
-    z_new=Network->x[i][j]*RefSF->Image2World[2][0]+Network->y[i][j]*RefSF->Image2World[2][1]+Network->z[i][j]*RefSF->Image2World[2][2]+RefSF->Image2World[2][3];
-        
-        Network->x[i][j]=x_new;
-        Network->y[i][j]=y_new;
-        Network->z[i][j]=z_new;
-        Network->d[i][j]=Network->d[i][j]*vox_mm;
-  }
-}
-
-
-//convert mm -> voxels
-void Lineset_MillimetersToVoxels(Lineset * Network,ScalarField * RefSF){
-  int i,j;
-  float x_new,y_new,z_new;
-  float x_mm,y_mm,z_mm,vox_mm,three;
-  
-  three=3;
-  
-  x_mm=sqrt(RefSF->Image2World[0][0]*RefSF->Image2World[0][0]+RefSF->Image2World[0][1]*RefSF->Image2World[0][1]+RefSF->Image2World[0][2]*RefSF->Image2World[0][2]);
-  y_mm=sqrt(RefSF->Image2World[1][0]*RefSF->Image2World[1][0]+RefSF->Image2World[1][1]*RefSF->Image2World[1][1]+RefSF->Image2World[1][2]*RefSF->Image2World[1][2]);
-  z_mm=sqrt(RefSF->Image2World[2][0]*RefSF->Image2World[2][0]+RefSF->Image2World[2][1]*RefSF->Image2World[2][1]+RefSF->Image2World[2][2]*RefSF->Image2World[2][2]);
-  vox_mm=(x_mm+y_mm+z_mm)/three;
-  
-  for (i=0;i<2*Network->NbSeg;i++) if (Network->NbEl[i]!=0) for (j=0;j<Network->NbEl[i];j++){
-    x_new=Network->x[i][j]*RefSF->World2Image[0][0]+Network->y[i][j]*RefSF->World2Image[0][1]+Network->z[i][j]*RefSF->World2Image[0][2]+RefSF->World2Image[0][3];
-    y_new=Network->x[i][j]*RefSF->World2Image[1][0]+Network->y[i][j]*RefSF->World2Image[1][1]+Network->z[i][j]*RefSF->World2Image[1][2]+RefSF->World2Image[1][3];
-    z_new=Network->x[i][j]*RefSF->World2Image[2][0]+Network->y[i][j]*RefSF->World2Image[2][1]+Network->z[i][j]*RefSF->World2Image[2][2]+RefSF->World2Image[2][3];
-        
-        Network->x[i][j]=x_new;
-        Network->y[i][j]=y_new;
-        Network->z[i][j]=z_new;
-        Network->d[i][j]=Network->d[i][j]/vox_mm;
-  }
-}
-
-
-
-
-//Save a lineset in a mv3d file
-void SaveLineset(Lineset * Network,char nomfich[256]){
-    int i,iBis,j,TmpCount;
-    FILE *dataFile;
-    int NbSeg,NbEl;
-    int * listeSuivis;
-    int temp;
-    int * SegEndNb;
-    int WhichSegEndI,WhichSegEndJ;
-    int LocElInSegI,LocElInSegJ;
-    int Nb1,Nb2,Nb3,Nb4,Nb5,Nb6,Nb7;
-    int NbIntersections;
-    
-    //1 - ouverture du fichier contenant les donnes
-    dataFile=fopen(nomfich,"w");
-    
-    //2 - entete
-    
-    //2.1 - recherche le nb de segments et d'elements.
-    NbEl=0;
-    NbSeg=0;
-    for (i=0;i<2*Network->NbSeg;i++){    //les 2* servent a gerer les segments additionnels (pour les jointures)
-        if (Network->NbEl[i]!=0){
-            for (j=0;j<Network->NbEl[i];j++)
-                NbEl++;
-            NbSeg++;
-		}
-	}
-    
-    //2.2 - TmpCount le nombre d'intersections
-    SegEndNb=(int *)malloc(4*(Network->NbSeg)*sizeof(int)); //on a NbSeg avant traitements. On en rajoute potentiellement autant pour
-    //les traitements (*2). On considere deux bouts par segment (*2)
-    for (i=0;i<2*Network->NbSeg;i++){
-        SegEndNb[2*i]=0;
-        SegEndNb[2*i+1]=0;
-	}
-    
-    for (i=0;i<2*Network->NbSeg-1;i++) if (Network->NbEl[i]!=0) for(WhichSegEndI=0;WhichSegEndI<2;WhichSegEndI++){
-        for (j=i+1;j<2*Network->NbSeg;j++) if (Network->NbEl[j]!=0) for(WhichSegEndJ=0;WhichSegEndJ<2;WhichSegEndJ++){
-            //nro de l'element etudie
-            LocElInSegI=(Network->NbEl[i]-1)*WhichSegEndI;
-            LocElInSegJ=(Network->NbEl[j]-1)*WhichSegEndJ;
-            
-            //incrementation du nombre de bout si on a une intersection
-            if (fabs(Network->x[i][LocElInSegI]-Network->x[j][LocElInSegJ])<0.1)
-                if (fabs(Network->y[i][LocElInSegI]-Network->y[j][LocElInSegJ])<0.1)
-                    if (fabs(Network->z[i][LocElInSegI]-Network->z[j][LocElInSegJ])<0.1){
-                        SegEndNb[2*i+WhichSegEndI]++;
-                        SegEndNb[2*j+WhichSegEndJ]++;
-                    }
-		}
-	}
-    
-    
-    //en chaque bout, le nombre N de segments arrivant au noeud est trouvable par : SegEndNb[X]= sum_{i=1}^{i=N-1} i = N*(N-1)/2
-    Nb2=0; Nb3=0; Nb4=0; Nb5=0; Nb6=0; Nb7=0;
-    for (i=0;i<2*Network->NbSeg;i++) if (Network->NbEl[i]!=0) for(WhichSegEndI=0;WhichSegEndI<2;WhichSegEndI++){
-        if (SegEndNb[2*i+WhichSegEndI]==0)  SegEndNb[2*i+WhichSegEndI]=0;
-        else if (SegEndNb[2*i+WhichSegEndI]==1)   {SegEndNb[2*i+WhichSegEndI]=2; Nb2++;}   //
-        else if (SegEndNb[2*i+WhichSegEndI]<=3)   {SegEndNb[2*i+WhichSegEndI]=3; Nb3++;}   //
-        else if (SegEndNb[2*i+WhichSegEndI]<=6)   {SegEndNb[2*i+WhichSegEndI]=4; Nb4++;}   // -> on met <= et non == pour les boucles eventuelles
-        else if (SegEndNb[2*i+WhichSegEndI]<=10)  {SegEndNb[2*i+WhichSegEndI]=5; Nb5++;}  //
-        else if (SegEndNb[2*i+WhichSegEndI]<=15)  {SegEndNb[2*i+WhichSegEndI]=6; Nb6++;}  //
-        else if (SegEndNb[2*i+WhichSegEndI]<=21)  {SegEndNb[2*i+WhichSegEndI]=7; Nb7++;}  //
-	}
-    
-    NbIntersections=Nb2/2+Nb3/3+Nb4/4+Nb5/5+Nb6/6+Nb7/7;
-	
-    
-    //2.3 - ecriture de l'entete
-    fprintf(dataFile,"# MicroVisu3D file\n");
-    fprintf(dataFile,"# Number of lines   %d\n",NbSeg);
-    fprintf(dataFile,"# Number of points  %d\n",NbEl);
-    fprintf(dataFile,"# Number of inter.  %d\n",NbIntersections);
-    fprintf(dataFile,"#\n");
-    fprintf(dataFile,"# No		x		y		z		d\n");
-    fprintf(dataFile,"#\n");
-    
-    //3 - sauvegarde des donnees
-    TmpCount=0;
-    
-    for (i=0;i<2*Network->NbSeg;i++) if (Network->NbEl[i]!=0){
-        for (j=0;j<Network->NbEl[i];j++)
-            fprintf(dataFile,"%d	%lf	%lf	%lf	%lf\n",TmpCount,Network->x[i][j],Network->y[i][j],Network->z[i][j],Network->d[i][j]);
-        TmpCount++;
-        fprintf(dataFile,"\n");
-	}
-    
-    fclose(dataFile);
-
-}
-
-
-//Read a lineset in a mv3d file
-void ReadLineset(Lineset * Network,char nomfich[256]){
-    FILE *dataFile;
-    char CT;
-    char CarTestPrec;
-    int NoLoc,i,j,k,m,n;
-    double xLoc,yLoc,zLoc,dLoc;
-    
-    //Initialisation
-    //ouverture du fichier contenant les donnes
-    dataFile=fopen(nomfich,"rb");
-    
-    //Mise en memoire du fichier Mv3d
-    // 1 - TmpCount le nombre de segments
-    printf("Mise en memoire des vaisseaux de l'image\n");
-    
-    fseek(dataFile,0,SEEK_SET);  //placement au debut du fichier (on y est deja mais c'est plus propre)
-    CT=fgetc(dataFile);
-	
-    while(!feof(dataFile)){
-        //lecture du caractere courant et stoquage du precedent
-        CarTestPrec=CT;
-        CT=fgetc(dataFile);   //fait avancer d'un caractere dans dataFile
-        
-        //tests et action
-        if (CarTestPrec=='\n')
-            if ((CT=='0')||(CT=='1')||(CT=='2')||(CT=='3')||(CT=='4')||(CT=='5')||(CT=='6')||(CT=='7')||(CT=='8')||(CT=='9')){
-                fseek(dataFile,-1,SEEK_CUR);
-                fscanf(dataFile,"%d	%lf	%lf	%lf	%lf",&NoLoc,&xLoc,&yLoc,&zLoc,&dLoc);  //avance de la ligne
-                fseek(dataFile,-2,SEEK_CUR);   //recule de 2 pour reinitialiser proprement CT et CarTestPrec
-			}
-	}
-    
-    NoLoc++; //le dernier NoLoc correspond au nombre de segments -1 (on n'a pas TmpCount le zero)
-    Network->NbSeg=NoLoc;   //contient le nombre de segments
-    
-    // 2 - Alloue la memoire necessaire (1)
-    
-    Network->NbEl=(int*)malloc(2*Network->NbSeg*sizeof(int));  //on en alloue deux fois trop pour pouvoir eventuellement en rajouter
-    //par la suite. On ne tient cependant TmpCount de ces elements encore
-    //allouable que dans qques fonctions (JointSeg, SaveLineset)
-    Network->x=(double**)malloc(2*Network->NbSeg*sizeof(double*));
-    Network->y=(double**)malloc(2*Network->NbSeg*sizeof(double*));
-    Network->z=(double**)malloc(2*Network->NbSeg*sizeof(double*));
-    Network->d=(double**)malloc(2*Network->NbSeg*sizeof(double*));
-    
-    // 3 - TmpCount le nombre d'elements dans chaque segment
-    
-    fseek(dataFile,0,SEEK_SET);  //placement au debut du fichier
-    CT=fgetc(dataFile);
-	
-    while(!feof(dataFile)){
-        //lecture du caractere courant et stoquage du precedent
-        CarTestPrec=CT;
-        CT=fgetc(dataFile);   //fait avancer d'un caractere dans dataFile
-        
-        //tests et action
-        if (CarTestPrec=='\n')
-            if ((CT=='0')||(CT=='1')||(CT=='2')||(CT=='3')||(CT=='4')||(CT=='5')||(CT=='6')||(CT=='7')||(CT=='8')||(CT=='9')){
-                fseek(dataFile,-1,SEEK_CUR);
-                fscanf(dataFile,"%d	%lf	%lf	%lf	%lf",&NoLoc,&xLoc,&yLoc,&zLoc,&dLoc);  //avance de la ligne
-                fseek(dataFile,-2,SEEK_CUR);   //recule de 2 pour reinitialiser proprement CT et CarTestPrec
-                Network->NbEl[NoLoc]++;  //on rajoute une case pour le segment courant
-			}
-	}
-    
-    
-    // 4 - Alloue la memoire necessaire (2)
-    
-    for(i=0;i<Network->NbSeg;i++){
-        Network->x[i]=(double*)malloc(Network->NbEl[i]*sizeof(double));
-        Network->y[i]=(double*)malloc(Network->NbEl[i]*sizeof(double));
-        Network->z[i]=(double*)malloc(Network->NbEl[i]*sizeof(double));
-        Network->d[i]=(double*)malloc(Network->NbEl[i]*sizeof(double));
-	}
-	
-    for (i=0;i<Network->NbSeg;i++)
-        Network->NbEl[i]=0;
-	
-    // 5 - mise en memoire des valeurs de chaque element
-    
-    fseek(dataFile,0,SEEK_SET);
-    CT=fgetc(dataFile);
-    fseek(dataFile,1,SEEK_CUR);
-	
-    while(!feof(dataFile)){
-        //lecture du caractere courant et stoquage du precedent
-        CarTestPrec=CT;
-        CT=fgetc(dataFile);   //fait avancer d'un caractere dans dataFile
-        
-        //tests et action
-        if (CarTestPrec=='\n')
-            if ((CT=='0')||(CT=='1')||(CT=='2')||(CT=='3')||(CT=='4')||(CT=='5')||(CT=='6')||(CT=='7')||(CT=='8')||(CT=='9')){
-                fseek(dataFile,-1,SEEK_CUR);
-                fscanf(dataFile,"%d	%lf	%lf	%lf	%lf",&NoLoc,&xLoc,&yLoc,&zLoc,&dLoc);  //avance de la ligne
-                fseek(dataFile,-2,SEEK_CUR);   //recule de 2 pour reinitialiser proprement CT et CarTestPrec
-                Network->x[NoLoc][Network->NbEl[NoLoc]]=xLoc;
-                Network->y[NoLoc][Network->NbEl[NoLoc]]=yLoc;
-                Network->z[NoLoc][Network->NbEl[NoLoc]]=zLoc;
-                Network->d[NoLoc][Network->NbEl[NoLoc]]=dLoc;
-                Network->NbEl[NoLoc]++;
-			}
-	}
-    
-    
-    //Fermeture du fichier
-    fclose(dataFile);
-
-}
-
-
-
-
-//initialisate the TensorField4TV structure with zeros everywhere
-void InitTensorField4TV(TensorField4TV * TF, int NBX,int NBY,int NBZ){
-    int i,j,k;
-    int i2,j2,k2;
-    
-    //initialisation des tailles
-    TF->NBZ=NBZ;
-    TF->NBY=NBY;
-    TF->NBX=NBX;
-    
-    //initialisation du champ de tenseurs
-    for (i=0;i<3;i++) for (j=0;j<3;j++){
-        //create a float image
-        TF->Field[i][j].NBZ=NBZ;
-        TF->Field[i][j].NBY=NBY;
-        TF->Field[i][j].NBX=NBX;
-        
-        TF->Field[i][j].image = (float***)malloc((TF->Field[i][j].NBZ)*sizeof(float**));
-        
-        for (i2=0;i2<TF->Field[i][j].NBZ;i2++)
-            TF->Field[i][j].image[i2]=(float**)malloc((TF->Field[i][j].NBY)*sizeof(float*));
-        
-        for (i2=0;i2<TF->Field[i][j].NBZ;i2++) for (j2=0;j2<TF->Field[i][j].NBY;j2++)
-            TF->Field[i][j].image[i2][j2]=(float*)malloc((TF->Field[i][j].NBX)*sizeof(float));
-        
-        for (i2=0;i2<TF->Field[i][j].NBZ;i2++) for (j2=0;j2<TF->Field[i][j].NBY;j2++) for (k2=0;k2<TF->Field[i][j].NBX;k2++)
-  			TF->Field[i][j].image[i2][j2][k2]=0;
-	}
-    
-    //initiate TF->Functional
-    TF->Functional.NBZ=NBZ;
-    TF->Functional.NBY=NBY;
-    TF->Functional.NBX=NBX;
-    
-    TF->Functional.image = (float***)malloc((TF->Functional.NBZ)*sizeof(float**));
-    
-    for (i=0;i<TF->Functional.NBZ;i++)
-        TF->Functional.image[i]=(float**)malloc((TF->Functional.NBY)*sizeof(float*));
-    
-    for (i=0;i<TF->Functional.NBZ;i++) for (j=0;j<TF->Functional.NBY;j++)
-        TF->Functional.image[i][j]=(float*)malloc((TF->Functional.NBX)*sizeof(float));
-    
-    for (i=0;i<TF->Functional.NBZ;i++) for (j=0;j<TF->Functional.NBY;j++) for (k=0;k<TF->Functional.NBX;k++)
-        TF->Functional.image[i][j][k]=0;
-    
-    
-    //initiate TF->EnhancementField
-    TF->EnhancementField.NBZ=NBZ;
-    TF->EnhancementField.NBY=NBY;
-    TF->EnhancementField.NBX=NBX;
-    
-    TF->EnhancementField.image = (float***)malloc((TF->EnhancementField.NBZ)*sizeof(float**));
-    
-    for (i=0;i<TF->EnhancementField.NBZ;i++)
-        TF->EnhancementField.image[i]=(float**)malloc((TF->EnhancementField.NBY)*sizeof(float*));
-    
-    for (i=0;i<TF->EnhancementField.NBZ;i++) for (j=0;j<TF->EnhancementField.NBY;j++)
-        TF->EnhancementField.image[i][j]=(float*)malloc((TF->EnhancementField.NBX)*sizeof(float));
-    
-    for (i=0;i<TF->EnhancementField.NBZ;i++) for (j=0;j<TF->EnhancementField.NBY;j++) for (k=0;k<TF->EnhancementField.NBX;k++)
-        TF->EnhancementField.image[i][j][k]=0;
-    
-    
-    
-    
-    //initialisation de l'image qui represente le reseau (ndg=1) et les bouts (ndg=2)
-    TF->NetworkLabels=(int***)malloc(NBZ*sizeof(int**));
-    
-    for(i=0;i<NBZ;i++)
-        TF->NetworkLabels[i]=(int**)malloc(NBY*sizeof(int*));
-    
-    for(i=0;i<NBZ;i++)
-        for(j=0;j<NBY;j++)
-            TF->NetworkLabels[i][j]=(int*)malloc(NBX*sizeof(int));
-    
-    for(i=0;i<NBZ;i++)
-        for(j=0;j<NBY;j++)
-            for(k=0;k<NBX;k++)
-                TF->NetworkLabels[i][j][k]=0;
-
-}
-
-
-//Insert ALL chain fields in the TensorField4TV structure 'TF' using the information of 'Network' and the characeristic distance sigma.
-//The image and the tensor field of 'TF' must be equal to zero   (this function should the be used before computing the stick fields and ball fields)
-void InsertPlateChainFields(TensorField4TV * TF,Lineset * Network, double sigma,double FieldWeight){
-    int i,j,k;
-    int i2,j2,k2;
-    int TempI;
-    float TempF;
-    double TempD;
-    int DistMax;
-    int iteration;
-    int rayon;
-    double rayon2;
-    int z2,y2,x2;
-    int z3,y3,x3;
-    double Sx,Sy,Sz,Sxn,Syn,Szn,x2n,y2n,z2n;
-    double DistMin;
-    double DistTemp;
-    double Ztest,Ytest,Xtest;
-    double tmpX,tmpY,tmpZ;
-    double Poids;
-    
-    
-    // 1 ) INITIALISATIONS
-    //parametres
-    DistMax=7;   //doit etre plus grand que 3
-    
-    
-    if (Network->NbSeg>=100000000){
-        printf("The network contains too much segments\n");
-        return;
-	}
-    
-    
-    //verification du champ et de l'image du reseau
-    TempF=0;
-    for (i=0;i<TF->NBZ;i++)
-        for (j=0;j<TF->NBY;j++)
-            for (k=0;k<TF->NBX;k++){
-                TempF+=(float)TF->NetworkLabels[i][j][k];
-                TempF+=TF->Field[0][0].image[i][j][k];
-                TempF+=TF->Field[0][1].image[i][j][k];
-                TempF+=TF->Field[0][2].image[i][j][k];
-                TempF+=TF->Field[1][0].image[i][j][k];
-                TempF+=TF->Field[1][1].image[i][j][k];
-                TempF+=TF->Field[1][2].image[i][j][k];
-                TempF+=TF->Field[2][0].image[i][j][k];
-                TempF+=TF->Field[2][1].image[i][j][k];
-                TempF+=TF->Field[2][2].image[i][j][k];
-            }
-    
-    if (TempF>0.1){
-        printf("Les champs ont deja ete utilises. On ne peut pas calculer les champs autour des segment.");
-        return;
-	}
-    
-    // 1 ) FILL THE VECTOR FIELD
-    
-    //mise a zero des pts du vaisseau
-    for (i=0;i<Network->NbSeg;i++) if (Network->NbEl[i]>2*DistMax+4){
-        for (j=DistMax+2;j<Network->NbEl[i]-DistMax-2;j++){
-            //tangente au squelette
-            Sx=(double)(Network->x[i][j+3]-Network->x[i][j-3]);
-            Sy=(double)(Network->y[i][j+3]-Network->y[i][j-3]);
-            Sz=(double)(Network->z[i][j+3]-Network->z[i][j-3]);
-            Sxn=Sx/(sqrt(pow(Sx,2)+pow(Sy,2)+pow(Sz,2)));
-            Syn=Sy/(sqrt(pow(Sx,2)+pow(Sy,2)+pow(Sz,2)));
-            Szn=Sz/(sqrt(pow(Sx,2)+pow(Sy,2)+pow(Sz,2)));
-            
-            //creation d'une sphere du bon diametre autour du point courant
-            rayon=(int)(Network->d[i][j]/2+0.5);
-            if (rayon<1) rayon=1;
-            rayon2=(double)rayon;
-            for (z2=-rayon;z2<rayon;z2++)
-                for (y2=-rayon;y2<rayon;y2++)
-                    for (x2=-rayon;x2<rayon;x2++){
-                        z3=(int)(Network->z[i][j])+z2;
-                        y3=(int)(Network->y[i][j])+y2;
-                        x3=(int)(Network->x[i][j])+x2;
-                        TempI=0;
-                        //test si le point test est bien dans l'image
-                        if (!((x3>=0)&&(x3<TF->NBX)&&(y3>=0)&&(y3<TF->NBY)&&(z3>=0)&&(z3<TF->NBZ))) TempI=1;
-                        //test si le point test est dans le cercle
-                        TempD=sqrt(pow((double)z2,2)+pow((double)y2,2)+pow((double)x2,2));
-                        if (TempI==0) if (!(TempD<rayon2)) TempI=1;
-                        //test si le point est ok vis a vis du squelette
-                        if ((TempI==0)&&(TempD>3)){
-                            x2n=((double)x2)/TempD;
-                            y2n=((double)y2)/TempD;
-                            z2n=((double)z2)/TempD;
-                            TempD=Sxn*x2n+Syn*y2n+Szn*z2n;
-                            if (TempD*TempD>0.04) TempI=1;  //angle d'environs 10 degres avec la tangente au squelette.
-                        }
-                        
-                        //le point est OK
-                        if (TempI==0) {
-                            TF->NetworkLabels[z3][y3][x3]=300000000+i;
-                            TF->Field[0][0].image[z3][y3][x3]=0;
-                            TF->Field[1][1].image[z3][y3][x3]=0;
-                            TF->Field[2][2].image[z3][y3][x3]=0;
-                        }
-                        
-                    }
-		}
-	}
-	
-    
-    //remplissage du champ de vecteur...
-    //...ini
-    for (i=1;i<TF->NBZ-1;i++)
-        for (j=1;j<TF->NBY-1;j++)
-            for (k=1;k<TF->NBX-1;k++){
-                if (TF->NetworkLabels[i][j][k]>=300000000)
-                    for (z2=-1;z2<2;z2++)
-                        for (y2=-1;y2<2;y2++)
-                            for (x2=-1;x2<2;x2++)
-                                if (TF->NetworkLabels[i+z2][j+y2][k+x2]==0){
-                                    TF->NetworkLabels[i+z2][j+y2][k+x2]=6;
-                                }
-            }
-    
-    
-    //...boucle
-    for (iteration=0;iteration<DistMax-2;iteration++){
-        //La prochaine couche (=6) devient la couche courante (=5). La courante (=5) devient l'ancienne (=4)
-        for (i=0;i<TF->NBZ;i++)
-            for (j=0;j<TF->NBY;j++)
-                for (k=0;k<TF->NBX;k++){
-                    if (TF->NetworkLabels[i][j][k]==5) TF->NetworkLabels[i][j][k]=4;
-                    if (TF->NetworkLabels[i][j][k]==6) TF->NetworkLabels[i][j][k]=5;
-                }
-		
-        //traitement des bords
-        for (i=0;i<TF->NBZ;i++)
-            for (j=0;j<TF->NBY;j++){
-                if (TF->NetworkLabels[i][j][0]>0) TF->NetworkLabels[i][j][0]=0;
-                if (TF->NetworkLabels[i][j][TF->NBX-1]>0) TF->NetworkLabels[i][j][TF->NBX-1]=0;
-            }
-        for (i=0;i<TF->NBZ;i++)
-            for (k=0;k<TF->NBX;k++){
-                if (TF->NetworkLabels[i][0][k]>0) TF->NetworkLabels[i][0][k]=0;
-                if (TF->NetworkLabels[i][TF->NBY-1][k]>0) TF->NetworkLabels[i][TF->NBY-1][k]=0;
-            }
-        for (j=0;j<TF->NBY;j++)
-            for (k=0;k<TF->NBX;k++){
-                if (TF->NetworkLabels[0][j][k]>0) TF->NetworkLabels[0][j][k]=0;
-                if (TF->NetworkLabels[TF->NBZ-1][j][k]>0) TF->NetworkLabels[TF->NBZ-1][j][k]=0;
-            }
-        
-        //calcul des meilleur vecteurs pour les pts de la couche courante (=5)
-        for (i=1;i<TF->NBZ-1;i++)
-            for (j=1;j<TF->NBY-1;j++)
-                for (k=1;k<TF->NBX-1;k++)
-                    if (TF->NetworkLabels[i][j][k]==5){
-                        DistMin=1000000;
-                        for (z2=-1;z2<2;z2++)
-                            for (y2=-1;y2<2;y2++)
-                                for (x2=-1;x2<2;x2++){
-                                    //mise a jour de la couche actuelle
-                                    if ((TF->NetworkLabels[i+z2][j+y2][k+x2]==4)||(TF->NetworkLabels[i+z2][j+y2][k+x2]>=300000000)){
-                                        Ztest=(double)z2+(double)TF->Field[2][2].image[i+z2][j+y2][k+x2];
-                                        Ytest=(double)y2+(double)TF->Field[1][1].image[i+z2][j+y2][k+x2];
-                                        Xtest=(double)x2+(double)TF->Field[0][0].image[i+z2][j+y2][k+x2];
-                                        DistTemp=sqrt(pow(Ztest,2)+pow(Ytest,2)+pow(Xtest,2));
-                                        if (DistTemp<DistMin){
-                                            DistMin=DistTemp;
-                                            TF->Field[2][2].image[i][j][k]=(float)Ztest;
-                                            TF->Field[1][1].image[i][j][k]=(float)Ytest;
-                                            TF->Field[0][0].image[i][j][k]=(float)Xtest;
-                                        }
-                                    }
-                                    //detection de la prochaine couche
-                                    if (TF->NetworkLabels[i+z2][j+y2][k+x2]==0) TF->NetworkLabels[i+z2][j+y2][k+x2]=6;
-                                }
-                    }
-	}
-    
-    
-    //nettoyage de l'image et tensorisation des vecteurs
-    for (i=0;i<TF->NBZ;i++)
-        for (j=0;j<TF->NBY;j++)
-            for (k=0;k<TF->NBX;k++){
-                TempI=0;
-                if (TF->NetworkLabels[i][j][k]==4) {
-                    TF->NetworkLabels[i][j][k]=0;
-                    TempI=1;
-                }
-                if (TF->NetworkLabels[i][j][k]==5) {
-                    TF->NetworkLabels[i][j][k]=0;
-                    TempI=1;
-                }
-                if (TF->NetworkLabels[i][j][k]==6)
-                    TF->NetworkLabels[i][j][k]=0;
-                if (TempI==1){
-                    //tensorisation
-                    tmpX=(double)TF->Field[0][0].image[i][j][k];
-                    tmpY=(double)TF->Field[1][1].image[i][j][k];
-                    tmpZ=(double)TF->Field[2][2].image[i][j][k];
-                    
-                    TempD=sqrt(pow(tmpX,2)+pow(tmpY,2)+pow(tmpZ,2));
-                    tmpX=tmpX/TempD;
-                    tmpY=tmpY/TempD;
-                    tmpZ=tmpZ/TempD;
-                    
-                    //Poids=exp(-pow((TempD+4)*20,2)/pow(sigma,2));
-                    Poids=exp(-pow(3+12*TempD/((double)DistMax-2),2)/pow(sigma,2))*FieldWeight;
-                    
-                    tmpX=tmpX*Poids;
-                    tmpY=tmpY*Poids;
-                    tmpZ=tmpZ*Poids;
-                    
-                    TF->Field[0][0].image[i][j][k]=(float)pow(tmpX,2);
-                    TF->Field[0][1].image[i][j][k]=(float)(tmpX*tmpY);
-                    TF->Field[0][2].image[i][j][k]=(float)(tmpX*tmpZ);
-                    TF->Field[1][0].image[i][j][k]=(float)(tmpX*tmpY);
-                    TF->Field[1][1].image[i][j][k]=(float)pow(tmpY,2);
-                    TF->Field[1][2].image[i][j][k]=(float)(tmpY*tmpZ);
-                    TF->Field[2][0].image[i][j][k]=(float)(tmpX*tmpZ);
-                    TF->Field[2][1].image[i][j][k]=(float)(tmpZ*tmpY);
-                    TF->Field[2][2].image[i][j][k]=(float)pow(tmpZ,2);
-                }
-            }
-    //mise a zero des bords
-    for (i=0;i<TF->NBZ;i++)
-        for (j=0;j<TF->NBY;j++){
-            TF->Field[0][0].image[i][j][0]=0; TF->Field[0][1].image[i][j][0]=0; TF->Field[0][2].image[i][j][0]=0;
-            TF->Field[1][0].image[i][j][0]=0; TF->Field[1][1].image[i][j][0]=0; TF->Field[1][2].image[i][j][0]=0;
-            TF->Field[2][0].image[i][j][0]=0; TF->Field[2][1].image[i][j][0]=0; TF->Field[2][2].image[i][j][0]=0;
-            TF->Field[0][0].image[i][j][TF->NBX-1]=0; TF->Field[0][1].image[i][j][TF->NBX-1]=0; TF->Field[0][2].image[i][j][TF->NBX-1]=0;
-            TF->Field[1][0].image[i][j][TF->NBX-1]=0; TF->Field[1][1].image[i][j][TF->NBX-1]=0; TF->Field[1][2].image[i][j][TF->NBX-1]=0;
-            TF->Field[2][0].image[i][j][TF->NBX-1]=0; TF->Field[2][1].image[i][j][TF->NBX-1]=0; TF->Field[2][2].image[i][j][TF->NBX-1]=0;
-        }
-    
-    for (i=0;i<TF->NBZ;i++)
-        for (k=0;k<TF->NBX;k++){
-            TF->Field[0][0].image[i][0][k]=0; TF->Field[0][1].image[i][0][k]=0; TF->Field[0][2].image[i][0][k]=0;
-            TF->Field[1][0].image[i][0][k]=0; TF->Field[1][1].image[i][0][k]=0; TF->Field[1][2].image[i][0][k]=0;
-            TF->Field[2][0].image[i][0][k]=0; TF->Field[2][1].image[i][0][k]=0; TF->Field[2][2].image[i][0][k]=0;
-            
-            TF->Field[0][0].image[i][TF->NBY-1][k]=0; TF->Field[0][1].image[i][TF->NBY-1][k]=0; TF->Field[0][2].image[i][TF->NBY-1][k]=0;
-            TF->Field[1][0].image[i][TF->NBY-1][k]=0; TF->Field[1][1].image[i][TF->NBY-1][k]=0; TF->Field[1][2].image[i][TF->NBY-1][k]=0;
-            TF->Field[2][0].image[i][TF->NBY-1][k]=0; TF->Field[2][1].image[i][TF->NBY-1][k]=0; TF->Field[2][2].image[i][TF->NBY-1][k]=0;
-        }
-    
-    for (j=0;j<TF->NBY;j++)
-        for (k=0;k<TF->NBX;k++){
-            TF->Field[0][0].image[0][j][k]=0; TF->Field[0][1].image[0][j][k]=0; TF->Field[0][2].image[0][j][k]=0;
-            TF->Field[1][0].image[0][j][k]=0; TF->Field[1][1].image[0][j][k]=0; TF->Field[1][2].image[0][j][k]=0;
-            TF->Field[2][0].image[0][j][k]=0; TF->Field[2][1].image[0][j][k]=0; TF->Field[2][2].image[0][j][k]=0;
-            
-            TF->Field[0][0].image[TF->NBZ-1][j][k]=0; TF->Field[0][1].image[TF->NBZ-1][j][k]=0; TF->Field[0][2].image[TF->NBZ-1][j][k]=0;
-            TF->Field[1][0].image[TF->NBZ-1][j][k]=0; TF->Field[1][1].image[TF->NBZ-1][j][k]=0; TF->Field[1][2].image[TF->NBZ-1][j][k]=0;
-            TF->Field[2][0].image[TF->NBZ-1][j][k]=0; TF->Field[2][1].image[TF->NBZ-1][j][k]=0; TF->Field[2][2].image[TF->NBZ-1][j][k]=0;
-        }
-}
-
-
-//Insert a stick voting field in the tensor field
-void InsertStickField(TensorField4TV * TF,Lineset * Network,int **ListSegmentEnds,int IdBout, double C, double sigma,int BoxSizes){
-    int i,j,k;
-    double V_x,V_y,V_z;
-    double V_x1,V_y1,V_z1;
-    double TempD,Dist;
-    int LocX,LocY,LocZ;
-    double LgArc,Courbure,Poids,phi;
-    int CX,CY,CZ;
-    double DX,DY,DZ;
-    int x2,y2,z2,z3,y3,x3;
-    double IndicDemiPlan;
-    int HalfBoxSizes;
-    
-    // 0 ) Parameteres of the cone in which the tensor field will be written
-    double ThetaLim,AngleLim;
-    ThetaLim=fabs(asin(pow(sigma,2)/(2*sqrt(C))))*180/3.14159;
-    if (ThetaLim<90) AngleLim=0.038;
-    if (ThetaLim<60) AngleLim=0.270;
-    if (ThetaLim<45) AngleLim=0.558;
-    if (ThetaLim<30) AngleLim=0.924;
-    
-    // 1 ) UPDATE THE TENSOR FIELD
-    
-    //determination du centre et de la direction du stick field
-    if (Network->NbEl[ListSegmentEnds[IdBout][0]]>=4){
-        if (ListSegmentEnds[IdBout][1]==0){  // on est sur le premier element du segment
-            CX=(int)(Network->x[ListSegmentEnds[IdBout][0]][2]+0.5);
-            CY=(int)(Network->y[ListSegmentEnds[IdBout][0]][2]+0.5);
-            CZ=(int)(Network->z[ListSegmentEnds[IdBout][0]][2]+0.5);
-            DX=(double)(Network->x[ListSegmentEnds[IdBout][0]][0]-Network->x[ListSegmentEnds[IdBout][0]][3]);
-            DY=(double)(Network->y[ListSegmentEnds[IdBout][0]][0]-Network->y[ListSegmentEnds[IdBout][0]][3]);
-            DZ=(double)(Network->z[ListSegmentEnds[IdBout][0]][0]-Network->z[ListSegmentEnds[IdBout][0]][3]);
-		}
-        else{   //on est sur le dernier element du segment
-            CX=(int)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-3]+0.5);
-            CY=(int)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-3]+0.5);
-            CZ=(int)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-3]+0.5);
-            DX=(double)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-4]);
-            DY=(double)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-4]);
-            DZ=(double)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-4]);
-		}
-	}
-    else{
-        if (ListSegmentEnds[IdBout][1]==0){  // on est sur le premier element du segment
-            CX=(int)(Network->x[ListSegmentEnds[IdBout][0]][0]+0.5);
-            CY=(int)(Network->y[ListSegmentEnds[IdBout][0]][0]+0.5);
-            CZ=(int)(Network->z[ListSegmentEnds[IdBout][0]][0]+0.5);
-            DX=(double)(Network->x[ListSegmentEnds[IdBout][0]][0]-Network->x[ListSegmentEnds[IdBout][0]][1]);
-            DY=(double)(Network->y[ListSegmentEnds[IdBout][0]][0]-Network->y[ListSegmentEnds[IdBout][0]][1]);
-            DZ=(double)(Network->z[ListSegmentEnds[IdBout][0]][0]-Network->z[ListSegmentEnds[IdBout][0]][1]);
-		}
-        else{   //on est sur le dernier element du segment
-            CX=(int)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]+0.5);
-            CY=(int)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]+0.5);
-            CZ=(int)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]+0.5);
-            DX=(double)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-2]);
-            DY=(double)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-2]);
-            DZ=(double)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-2]);
-		}
-	}
-    
-    
-    
-    //normalisation de la direction
-    TempD=sqrt(pow(DX,2)+pow(DY,2)+pow(DZ,2));
-    DX=DX/TempD;
-    DY=DY/TempD;
-    DZ=DZ/TempD;
-    
-    //BoxSizes devient la moitie d'un cote de boite (pour coller aux boucles for)
-    HalfBoxSizes=(int)((BoxSizes-1)/2);
-    
-    //remplissage du champ de tenseurs
-    for (i=-HalfBoxSizes;i<HalfBoxSizes;i++) for (j=-HalfBoxSizes;j<HalfBoxSizes;j++) for (k=-HalfBoxSizes;k<HalfBoxSizes;k++){
-        LocX=CX+k;
-        LocY=CY+j;
-        LocZ=CZ+i;
-        
-        //vecteur du centre au pt courant norm\'e
-        Dist=sqrt(static_cast<double>((k*k)+(j*j)+(i*i)));
-        V_x1=((double)k)/Dist;
-        V_y1=((double)j)/Dist;
-        V_z1=((double)i)/Dist;
-        
-        IndicDemiPlan=DX*V_x1+DY*V_y1+DZ*V_z1;
-        
-        if ((LocX>0)&&(LocX<TF->NBX)&&(LocY>0)&&(LocY<TF->NBY)&&(LocZ>0)&&(LocZ<TF->NBZ)&&((IndicDemiPlan>AngleLim)||(Dist<3))){
-            // A ) vecteur a injecter dans le tenseur norm\'e
-            //vecteur norm\'e que l'on va injecter dans le tenseur (apres ponderation)
-            TempD=V_x1*DX+V_y1*DY+V_z1*DZ;
-            
-            V_x=2*V_x1*TempD-DX;
-            V_y=2*V_y1*TempD-DY;
-            V_z=2*V_z1*TempD-DZ;
-            
-            // B ) ponderation du vecteur
-            
-            //utilisation du resultat pour calculer l'angle entre la direction et le vecteur entre
-            //l'origine et le pt etudie
-            TempD=V_x1*DX+V_y1*DY+V_z1*DZ;
-            
-            if (TempD<0){Poids=0;}  //on est a l'arriere
-            else{
-                if (TempD>1)  TempD=1; // au cas ou il y ai des erreurs d'arrondi
-                phi=acos(TempD);
-                Courbure=2*sin(phi)/Dist;  //en fait l'inverse de la courbure
-                if (phi<0.01) LgArc=Dist;
-                else LgArc=Dist*phi/sin(phi);
-                Poids=exp(-(pow(LgArc,2)+C*pow(Courbure,2))/pow(sigma,2));
-			}
-            
-            //V_x=V_x*Poids;
-            //V_y=V_y*Poids;
-            //V_z=V_z*Poids;
-            
-            // C ) injection du vecteur dans le tenseur
-            TF->Field[0][0].image[LocZ][LocY][LocX]+=(float)(V_x*V_x*Poids);  // Poids did used to be integrated in the previous lines
-            TF->Field[0][1].image[LocZ][LocY][LocX]+=(float)(V_x*V_y*Poids);
-            TF->Field[0][2].image[LocZ][LocY][LocX]+=(float)(V_x*V_z*Poids);
-            TF->Field[1][0].image[LocZ][LocY][LocX]+=(float)(V_x*V_y*Poids);
-            TF->Field[1][1].image[LocZ][LocY][LocX]+=(float)(V_y*V_y*Poids);
-            TF->Field[1][2].image[LocZ][LocY][LocX]+=(float)(V_y*V_z*Poids);
-            TF->Field[2][0].image[LocZ][LocY][LocX]+=(float)(V_x*V_z*Poids);
-            TF->Field[2][1].image[LocZ][LocY][LocX]+=(float)(V_z*V_y*Poids);
-            TF->Field[2][2].image[LocZ][LocY][LocX]+=(float)(V_z*V_z*Poids);
-		}
-	}
-    
-    // 2 ) UPDATE THE NETWORK IMAGE
-    
-    for (z2=-3;z2<4;z2++) for (y2=-3;y2<4;y2++) for (x2=-3;x2<4;x2++){
-        z3=(int)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]]+0.5)+z2;
-        y3=(int)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]]+0.5)+y2;
-        x3=(int)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]]+0.5)+x2;
-        if ((z3>=0)&&(z3<TF->NBZ)&&(y3>=0)&&(y3<TF->NBY)&&(x3>=0)&&(x3<TF->NBX))
-            TF->NetworkLabels[z3][y3][x3]=200000000+IdBout;
-	}
-
-}
-
-
-
-void InsertAllStickFields(TensorField4TV * TF,Lineset * Network,int **ListSegmentEnds,int SizeListSegmentEnds,double C, double sigma,int BoxSizes){
-  int i;
-  
-  for(i=0;i<SizeListSegmentEnds;i++)
-    InsertStickField(TF,Network,ListSegmentEnds,i,C,sigma,BoxSizes);
-}
-
-
-
-//Insert a ball voting field in the tensor field
-void InsertBallField(TensorField4TV * TF,Lineset * Network,int * ListIslands,int IdIlot, double sigma,int BoxSizes){
-    int i,j,k;
-    double V_x,V_y,V_z;
-    double V_x1,V_y1,V_z1;
-    double TempD,Dist;
-    int LocX,LocY,LocZ;
-    double LgArc,Courbure,Poids,phi;
-    int CX,CY,CZ;
-    int rayon;
-    double rayon2;
-    int x2,y2,z2,z3,y3,x3;
-    
-    
-    // 1 ) UPDATE THE TENSOR FIELD
-    
-    //determination du centre du ball field
-    CX=(int)(Network->x[ListIslands[IdIlot]][Network->NbEl[ListIslands[IdIlot]]/2]+0.5);
-    CY=(int)(Network->y[ListIslands[IdIlot]][Network->NbEl[ListIslands[IdIlot]]/2]+0.5);
-    CZ=(int)(Network->z[ListIslands[IdIlot]][Network->NbEl[ListIslands[IdIlot]]/2]+0.5);
-    
-    // BoxSizes devient la moitie d'un cote de boite (pour coller aux boucles_for)
-    BoxSizes=(BoxSizes-1)/2;
-    
-    //remplissage du champ de tenseurs
-    for (i=-BoxSizes;i<BoxSizes;i++) for (j=-BoxSizes;j<BoxSizes;j++) for (k=-BoxSizes;k<BoxSizes;k++){
-        LocX=CX+k;
-        LocY=CY+j;
-        LocZ=CZ+i;
-        if ((LocX>0)&&(LocX<TF->NBX)&&(LocY>0)&&(LocY<TF->NBY)&&(LocZ>0)&&(LocZ<TF->NBZ)){
-            
-            // A ) vecteur a injecter dans le tenseur norm\'e
-            //vecteur norm\'e que l'on va injecter dans le tenseur (apres ponderation)
-            Dist=sqrt(static_cast<double>((k*k)+(j*j)+(i*i)));
-            V_x=((double)k)/Dist;
-            V_y=((double)j)/Dist;
-            V_z=((double)i)/Dist;
-            
-            // B ) ponderation du vecteur
-            
-            //utilisation du resultat pour calculer l'angle entre la direction et le vecteur entre
-            //l'origine et le pt etudie
-            Poids=exp(-pow(Dist+3,2)/pow(sigma,2));
-            
-            if (Poids>0.01){
-                V_x=V_x*Poids;
-                V_y=V_y*Poids;
-                V_z=V_z*Poids;
-                
-                // C ) injection du vecteur dans le tenseur
-                TF->Field[0][0].image[LocZ][LocY][LocX]+=(float)pow(V_x,2);
-                TF->Field[0][1].image[LocZ][LocY][LocX]+=(float)(V_x*V_y);
-                TF->Field[0][2].image[LocZ][LocY][LocX]+=(float)(V_x*V_z);
-                TF->Field[1][0].image[LocZ][LocY][LocX]+=(float)(V_x*V_y);
-                TF->Field[1][1].image[LocZ][LocY][LocX]+=(float)pow(V_y,2);
-                TF->Field[1][2].image[LocZ][LocY][LocX]+=(float)(V_y*V_z);
-                TF->Field[2][0].image[LocZ][LocY][LocX]+=(float)(V_x*V_z);
-                TF->Field[2][1].image[LocZ][LocY][LocX]+=(float)(V_z*V_y);
-                TF->Field[2][2].image[LocZ][LocY][LocX]+=(float)pow(V_z,2);
-			}
-		}
-	}
-	
-    // 2 ) UPDATE THE NETWORK IMAGE
-    for (j=0;j<Network->NbEl[ListIslands[IdIlot]];j++){
-        //creation d'une sphere du bon diametre autour du point courant
-        //rayon=(int)(Network->d[ListIslands[IdIlot]][j]/2+0.5);
-        rayon=4;
-        rayon2=(double)rayon;
-        //if (rayon>20) printf("Un rayon a %d\n",rayon);
-        if (rayon>=1){
-            for (z2=-rayon;z2<=rayon;z2++) for (y2=-rayon;y2<=rayon;y2++) for (x2=-rayon;x2<=rayon;x2++)
-                if (sqrt(pow((double)z2,2)+pow((double)y2,2)+pow((double)x2,2))<rayon2+0.01){
-                    z3=(int)(Network->z[ListIslands[IdIlot]][j]+0.5)+z2;
-                    y3=(int)(Network->y[ListIslands[IdIlot]][j]+0.5)+y2;
-                    x3=(int)(Network->x[ListIslands[IdIlot]][j]+0.5)+x2;
-                    if ((x3>=0)&&(x3<TF->NBX)&&(y3>=0)&&(y3<TF->NBY)&&(z3>=0)&&(z3<TF->NBZ))
-                        TF->NetworkLabels[z3][y3][x3]=100000000+IdIlot;
-                }
-		}
-        else{
-            z3=(int)(Network->z[ListIslands[IdIlot]][j]+0.5);
-            y3=(int)(Network->y[ListIslands[IdIlot]][j]+0.5);
-            x3=(int)(Network->x[ListIslands[IdIlot]][j]+0.5);
-            if ((x3>=0)&&(x3<TF->NBX)&&(y3>=0)&&(y3<TF->NBY)&&(z3>=0)&&(z3<TF->NBZ)) TF->NetworkLabels[z3][y3][x3]=100000000+IdIlot;
-		}
-	}
-    
-}
-
-
-
-
-
-
-//Compute the saliency map to a curve
-//The functional is stored in the 'image' of TF
-void CptSaliencyMap(TensorField4TV * TF){  // TO FULLY TRANSLATE
-    int i,j,k;
-    float TempD;
-    float ** a;
-    float ** q;
-    float *  d;
-    int rayon;
-    double rayon2;
-    int z2,y2,x2,z3,y3,x3;
-    
-    //allocation memoire pour les variables utilisees dans l'appel de la fonction de Jacobi
-    
-    a=(float**)malloc(3*sizeof(float*));
-    for(i=0;i<3;i++) a[i]=(float*)malloc(3*sizeof(float));
-    q=(float**)malloc(3*sizeof(float*));
-    for(i=0;i<3;i++) q[i]=(float*)malloc(3*sizeof(float));
-    d=(float*)malloc(3*sizeof(float));
-    
-    for (i=0;i<TF->NBZ;i++) for (j=0;j<TF->NBY;j++) for (k=0;k<TF->NBX;k++){
-        if ((TF->Field[0][0].image[i][j][k]>0.000001)||(TF->Field[1][1].image[i][j][k]>0.000001)||(TF->Field[2][2].image[i][j][k]>0.000001)){
-            //remplissage de la matrice dont on extrait les valeurs propres
-            a[0][0]=TF->Field[0][0].image[i][j][k];
-            a[1][0]=TF->Field[1][0].image[i][j][k];
-            a[2][0]=TF->Field[2][0].image[i][j][k];
-            a[0][1]=TF->Field[0][1].image[i][j][k];
-            a[1][1]=TF->Field[1][1].image[i][j][k];
-            a[2][1]=TF->Field[2][1].image[i][j][k];
-            a[0][2]=TF->Field[0][2].image[i][j][k];
-            a[1][2]=TF->Field[1][2].image[i][j][k];
-            a[2][2]=TF->Field[2][2].image[i][j][k];
-            
-            //extraction des valeurs propres
-            //printf("in\n");
-            jacobi3(a,d,q);
-            //printf("out\n");
-            
-            //fill  Functional with the saliency map
-            TF->Functional.image[i][j][k]=d[0]-d[1];
-            
-            //first eigenvectors are also stored in  (TF->Field[0][0],TF->Field[1][1],TF->Field[2][2])
-            TF->Field[0][0].image[i][j][k]=q[0][0];
-            TF->Field[1][1].image[i][j][k]=q[1][0];
-            TF->Field[2][2].image[i][j][k]=q[2][0];
-            
-		}
-        else TF->Functional.image[i][j][k]=0;
-	}
-    
-    
-    //BEGIN ADDITIONAL STUFF
-    //ScalarField IdMap;
-    //IdMap.CreateVoidField(TF->NBX,TF->NBY,TF->NBZ);
-    //for (i=0;i<TF->NBZ;i++) for (j=0;j<TF->NBY;j++) for (k=0;k<TF->NBX;k++)
-    //    IdMap.P(TF->Functional.image[i][j][k],k,j,i);
-    //IdMap.Write("SaliencyMap.nii");
-    //
-    //VectorField EigenVec1Map;
-    //EigenVec1Map.CreateVoidField(TF->NBX,TF->NBY,TF->NBZ);
-    //for (i=0;i<TF->NBZ;i++) for (j=0;j<TF->NBY;j++) for (k=0;k<TF->NBX;k++){
-    //    if (TF->Field[0][0].image[i][j][k]>=0){
-    //        EigenVec1Map.P(TF->Field[0][0].image[i][j][k],0,k,j,i);
-    //        EigenVec1Map.P(TF->Field[1][1].image[i][j][k],1,k,j,i);
-    //        EigenVec1Map.P(TF->Field[2][2].image[i][j][k],2,k,j,i);
-    //    }
-    //    else{  //does not change anything in practice... just to make the output nicer on the x-axis
-    //        EigenVec1Map.P(-TF->Field[0][0].image[i][j][k],0,k,j,i);
-    //        EigenVec1Map.P(-TF->Field[1][1].image[i][j][k],1,k,j,i);
-    //        EigenVec1Map.P(-TF->Field[2][2].image[i][j][k],2,k,j,i);
-    //    }
-    //}
-    //
-    //EigenVec1Map.Write("EigenVec1MapX.nii","EigenVec1MapY.nii","EigenVec1MapZ.nii");
-    //END ADDITIONAL STUFF
-   
-}
-
-
-
-//From a point [IniX,IniY,IniZ]  (set to -2) and in the initial direction [DirecX,DirecY,DirecZ], we follow a path made of local maxima in TF->Functional
-//as long as its value is above 'ValFoncMin'.
-//remarks : * 'DirecX', 'DirecY' and'DirecZ' must be in [-1,1]
-//          * 'TargetType' is -1 if nothing is found / 1 if a segment is found / 2 if a segment end is found
-void TestPath(TensorField4TV * TF,Lineset * Network, int ** ListSegmentEnds,int IdBout,float ValFoncMin,int *TargetType, int *NbCible,int ** Path,int MaxPathLength, int *PathLength){
-    int locX,locY,locZ;
-    int locXtmp,locYtmp,locZtmp;
-    int i,j,k;
-    int DtempZ,DtempY,DtempX;
-    int DtempZtop,DtempYtop,DtempXtop;
-    float ValFoncTop;
-    int StopSearch,FirstIterations;
-    double Nrm;
-    int DirecX,DirecY,DirecZ;
-    int IniX,IniY,IniZ;
-    double DirecXini,DirecYini,DirecZini;
-    int NbPassages;
-    int NdgIni;
-    int TempI;
-    // 1 : initialisations...
-    
-    //valeurs du depart
-    if (ListSegmentEnds[IdBout][1]==0){  // on est sur le premier element du segment
-        IniX=(int)(Network->x[ListSegmentEnds[IdBout][0]][0]+0.5);
-        IniY=(int)(Network->y[ListSegmentEnds[IdBout][0]][0]+0.5);
-        IniZ=(int)(Network->z[ListSegmentEnds[IdBout][0]][0]+0.5);
-        DirecXini=(double)(Network->x[ListSegmentEnds[IdBout][0]][0]-Network->x[ListSegmentEnds[IdBout][0]][3]);
-        DirecYini=(double)(Network->y[ListSegmentEnds[IdBout][0]][0]-Network->y[ListSegmentEnds[IdBout][0]][3]);
-        DirecZini=(double)(Network->z[ListSegmentEnds[IdBout][0]][0]-Network->z[ListSegmentEnds[IdBout][0]][3]);
-	}
-    else{   //on est sur le dernier element du segment
-        IniX=(int)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]+0.5);
-        IniY=(int)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]+0.5);
-        IniZ=(int)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]+0.5);
-        DirecXini=(double)(Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->x[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-4]);
-        DirecYini=(double)(Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->y[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-4]);
-        DirecZini=(double)(Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-1]-Network->z[ListSegmentEnds[IdBout][0]][ListSegmentEnds[IdBout][1]-4]);
-	}
-    
-    //...depart de la recherche
-    Nrm=sqrt(pow(DirecXini,2)+pow(DirecYini,2)+pow(DirecZini,2));
-    DirecXini/=Nrm; DirecYini/=Nrm; DirecZini/=Nrm;
-    if (DirecXini<0) DirecXini-=0.5; else DirecXini+=0.5;
-    if (DirecYini<0) DirecYini-=0.5; else DirecYini+=0.5;
-    if (DirecZini<0) DirecZini-=0.5; else DirecZini+=0.5;
-    DirecX=(int)DirecXini;
-    DirecY=(int)DirecYini;
-    DirecZ=(int)DirecZini;
-    
-    if ((IniX<0)||(IniX>TF->NBX-1)||(IniY<0)||(IniY>TF->NBY-1)||(IniZ<0)||(IniZ>TF->NBZ-1)) {*PathLength=0; *TargetType=-1; return;}
-    
-    NdgIni=TF->NetworkLabels[IniZ][IniY][IniX];
-    
-    //... ini des variables de la cible
-    
-    *NbCible=-1;
-    *TargetType=-1;
-    // 2 : Parcours...
-    //...premier point
-    locZ=IniZ+DirecZ; locY=IniY+DirecY; locX=IniX+DirecX;
-    Path[0][0]=IniX; Path[0][1]=IniY; Path[0][2]=IniZ;
-    Path[1][0]=locX; Path[1][1]=locY; Path[1][2]=locZ;
-    
-    //... reste du parcours
-    StopSearch=0;
-    FirstIterations=2;
-    NbPassages=2;
-    if ((locX>=1)&&(locX<TF->NBX-1)&&(locY>=1)&&(locY<TF->NBY-1)&&(locZ>=1)&&(locZ<TF->NBZ-1))
-        while (((TF->Functional.image[locZ][locY][locX]>ValFoncMin)||(FirstIterations>0))&&(StopSearch==0)){
-            //printf("X=%d Y=%d Z=%d  - Fonc : %f   FoncMin : %f\n",locX,locY,locZ,TF->Functional.image[locZ][locY][locX],ValFoncMin);
-            
-            //recherche de la nouvelle direction optimale
-            ValFoncTop=0;
-            DtempZtop=0;
-            DtempYtop=0;
-            DtempXtop=0;
-            for (DtempZ=-1;DtempZ<=1;DtempZ++)
-                for (DtempY=-1;DtempY<=1;DtempY++)
-                    for (DtempX=-1;DtempX<=1;DtempX++) if (StopSearch==0){
-                        //calcul des carres de la norme des directions
-                        if ((locX+DtempX>=1)&&(locX+DtempX<TF->NBX-1)&&(locY+DtempY>=1)&&(locY+DtempY<TF->NBY-1)&&(locZ+DtempZ>=1)&&(locZ+DtempZ<TF->NBZ-1)){
-                            if (DirecZ*DtempZ+DirecY*DtempY+DirecX*DtempX>0){ //on ne fait pas marche arriere -> test de (DtempX,DtempY,DtempZ)
-                                //on n'est pas sur un bord...
-                                //... evolution du chemin
-                                if (TF->Functional.image[locZ+DtempZ][locY+DtempY][locX+DtempX]>ValFoncTop){
-                                    ValFoncTop=TF->Functional.image[locZ+DtempZ][locY+DtempY][locX+DtempX];
-                                    DtempZtop=DtempZ;
-                                    DtempYtop=DtempY;
-                                    DtempXtop=DtempX;
-                                }
-                                //... test si on est en un point particulier
-                                TempI=TF->NetworkLabels[locZ+DtempZ][locY+DtempY][locX+DtempX];
-                                if (FirstIterations==0){
-                                    if ((TempI>=200000000)&&(TempI<300000000)){ //on a rejoint un autre bout
-                                        //printf("Bout rejoint\n");
-                                        *TargetType=2;
-                                        *NbCible=TempI;
-                                        *PathLength=NbPassages;
-                                        return;
-                                    }
-                                    if ((TempI>=100000000)&&(TempI<200000000)){ //on a rejoint un petit ilot
-                                        //printf("Ilot rejoint\n");
-                                        *TargetType=1;
-                                        *NbCible=TempI;
-                                        *PathLength=NbPassages;
-                                        return;
-                                    }
-                                    if ((TempI>=300000000)&&(TempI<400000000)){ //on a rejoint un segment
-                                        //printf("Segment rejoint\n");
-                                        *TargetType=3;
-                                        *NbCible=TempI;
-                                        *PathLength=NbPassages;
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                        else{   //on est sur un bord
-                            //printf("bord\n");
-                            StopSearch=1;
-                        }
-                        
-                    }
-            //mise a jour du nouveau pt
-            DirecZ=DtempZtop; DirecY=DtempYtop; DirecX=DtempXtop;
-            locZ=locZ+DirecZ; locY=locY+DirecY; locX=locX+DirecX;
-            Path[NbPassages][0]=locX; Path[NbPassages][1]=locY; Path[NbPassages][2]=locZ;
-            
-            //gestion des premiers passages
-            if (FirstIterations>0){
-                //StopSearch=0;
-                if (TempI!=NdgIni) FirstIterations--;
-            }
-            //gestion des passages tout court (pour eviter les boucles infinies)
-            NbPassages++;
-            if (NbPassages>=MaxPathLength) { *PathLength=NbPassages; *NbCible=-1; *TargetType=-1; return;}
-        }
-}
-
-
-
-
-void IdentifySegment(Lineset * Network,int TargetId,int ** Path,int PathLength,int * IdSegBout,int * IdElBout,int **ListSegmentEnds,int IdSegIni){
-    double BoutX,BoutY,BoutZ;
-    int TopSegment;
-    int i,j,TopElem;
-    double distTemp,distTop;
-    int SegIni;
-    int TestBoucle;
-    int LocElInSegI,LocElInSegJ;
-    
-    //segment initial
-    SegIni=ListSegmentEnds[IdSegIni][0];
-    
-    //segment touche
-    BoutX=(double)Path[PathLength-1][0];
-    BoutY=(double)Path[PathLength-1][1];
-    BoutZ=(double)Path[PathLength-1][2];
-    
-    TopSegment=TargetId-300000000;
-    
-    distTop=100000000;
-    TopElem=-1;
-    for (i=2;i<Network->NbEl[TopSegment]-1;i++){
-        distTemp=pow(BoutX-Network->x[TopSegment][i],2)+pow(BoutY-Network->y[TopSegment][i],2)+pow(BoutZ-Network->z[TopSegment][i],2);
-        if (distTemp<distTop){
-            TopElem=i;
-            distTop=distTemp;
-		}
-	}
-    
-    //test si boucle cree
-    TestBoucle=0;
-    
-    if (SegIni==TopSegment) TestBoucle=0;
-    
-    LocElInSegI=Network->NbEl[SegIni]-1;
-    LocElInSegJ=Network->NbEl[TopSegment]-1;
-    
-    if (fabs(Network->x[SegIni][LocElInSegI]-Network->x[TopSegment][LocElInSegJ])<0.01)
-        if (fabs(Network->y[SegIni][LocElInSegI]-Network->y[TopSegment][LocElInSegJ])<0.01)
-            if (fabs(Network->z[SegIni][LocElInSegI]-Network->z[TopSegment][LocElInSegJ])<0.01) TestBoucle=1;
-    
-    if (fabs(Network->x[SegIni][LocElInSegI]-Network->x[TopSegment][0])<0.01)
-        if (fabs(Network->y[SegIni][LocElInSegI]-Network->y[TopSegment][0])<0.01)
-            if (fabs(Network->z[SegIni][LocElInSegI]-Network->z[TopSegment][0])<0.01) TestBoucle=1;
-    
-    if (fabs(Network->x[SegIni][0]-Network->x[TopSegment][LocElInSegJ])<0.01)
-        if (fabs(Network->y[SegIni][0]-Network->y[TopSegment][LocElInSegJ])<0.01)
-            if (fabs(Network->z[SegIni][0]-Network->z[TopSegment][LocElInSegJ])<0.01) TestBoucle=1;
-    
-    if (fabs(Network->x[SegIni][0]-Network->x[TopSegment][0])<0.01)
-        if (fabs(Network->y[SegIni][0]-Network->y[TopSegment][0])<0.01)
-            if (fabs(Network->z[SegIni][0]-Network->z[TopSegment][0])<0.01) TestBoucle=1;
-    
-    //printf("SegIni=%d  TopSegment=%d  TestBoucle=%d\n",SegIni,TopSegment,TestBoucle);
-    
-    //fusion OK ou non
-    
-    if (TestBoucle==0){
-        *IdSegBout=TopSegment;
-        *IdElBout=TopElem;
-	}
-    else{
-        *IdSegBout=-1;
-        *IdElBout=-1;
-	}
-}
-
-void IdentifySegmentEnd(Lineset * Network,int **ListSegmentEnds,int SizeListSegmentEnds,int * ListFusions,int NbFusions,int NbCible,int BoutIni,int * IdSegBout){
-    int j,k, Test;
-    
-    *IdSegBout=-1;
-    
-    j=NbCible-200000000;
-    
-    Test=0;
-    //test si on fait une boucle
-    if (ListSegmentEnds[j][0]==ListSegmentEnds[BoutIni][0]) Test=1;
-    
-    //on teste si la jonction n'existe pas deja
-    if (Test==0)for (k=0;k<NbFusions;k++){
-        if ((ListSegmentEnds[j][0]==ListFusions[4*k+2])&&(ListSegmentEnds[j][1]==ListFusions[4*k+3])&&(ListSegmentEnds[BoutIni][0]==ListFusions[4*k])&&(ListSegmentEnds[BoutIni][1]==ListFusions[4*k+1])){
-            Test=1;
-		}
-        if ((ListSegmentEnds[j][0]==ListFusions[4*k])&&(ListSegmentEnds[j][1]==ListFusions[4*k+1])&&(ListSegmentEnds[BoutIni][0]==ListFusions[4*k+2])&&(ListSegmentEnds[BoutIni][1]==ListFusions[4*k+3])){
-            Test=1;
-		}
-	}
-    
-    if (Test==0) *IdSegBout=j;
-    
-}
-
-
-void IdentifyIsland(Lineset * Network,int * ListIslands,int SizeListIslands,int * ListFusions,int NbFusions,int TargetId,int ** ListSegmentEnds,int BoutIni,int * IdIlot){
-    int TopDistance,TopSegment;
-    int j,Test,k;
-    double distance;
-    int SegIni,ElIni;
-    
-    SegIni=ListSegmentEnds[BoutIni][0];
-    ElIni=ListSegmentEnds[BoutIni][1];
-    
-    TopSegment=TargetId-100000000;
-    
-    //test si on ne fait pas une boucle
-    if (TopSegment!=-1) Test=0;
-    else Test=1;
-    
-    //on teste si la jonction n'existe pas deja
-    if (Test==0)for (k=0;k<NbFusions;k++){
-        if ((SegIni==ListFusions[4*k+2])&&(ElIni==ListFusions[4*k+3])&&(ListIslands[TopSegment]==ListFusions[4*k])&&(Network->NbEl[ListIslands[TopSegment]]/2==ListFusions[4*k+1])){
-            Test=3;
-            break;
-		}
-        if ((SegIni==ListFusions[4*k])&&(ElIni==ListFusions[4*k+1])&&(ListIslands[TopSegment]==ListFusions[4*k+2])&&(Network->NbEl[ListIslands[TopSegment]]/2==ListFusions[4*k+3])){
-            Test=4;
-            break;
-		}
-	}
-    
-    if (Test==0) *IdIlot=TopSegment;
-    else *IdIlot=-1;
-    
-}
-
-//Create a path to fill a gap. Segments diameters are linearly interpolated
-//TypeFin=1 -> island   | TypeFin=2 -> segment end
-int CreatePath(Lineset * Network,int SegIni,int ElemIni,int SegFin,int ElemFin,int TypeFin,int ** Path,int PathLength){
-    int i,j,k;
-    int SegCourant;
-    double TpX,TpY,TpZ,TpX2,TpY2,TpZ2;
-    double DiamIni,DiamFin;
-    
-    //initialisation du segment dans le reseau
-    
-    i=Network->NbSeg;
-    SegCourant=-1;
-    while((i<2*Network->NbSeg)&&(SegCourant==-1)){
-        if (Network->NbEl[i]==0){
-            SegCourant=i;
-		}
-        i++;
-	}
-    
-    //si il n'y a plus de segments libres.
-    if (SegCourant==-1){
-        printf("Plus assez de segments libres pour une jointure\n");
-        return -1;
-	}
-    
-    //allocation du nouveau segment
-    Network->x[SegCourant]=(double*)malloc((PathLength+1)*sizeof(double));  //
-    Network->y[SegCourant]=(double*)malloc((PathLength+1)*sizeof(double));  //
-    Network->z[SegCourant]=(double*)malloc((PathLength+1)*sizeof(double));  // remarque : On ne donne pas encore de valeur a Network->NbEl[SegCourant]
-    Network->d[SegCourant]=(double*)malloc((PathLength+1)*sizeof(double));  //
-    Network->NbEl[SegCourant]=PathLength+1;
-    
-    //remplissage du chemin
-    
-    Network->x[SegCourant][0]=Network->x[SegIni][ElemIni];
-    Network->y[SegCourant][0]=Network->y[SegIni][ElemIni];
-    Network->z[SegCourant][0]=Network->z[SegIni][ElemIni];
-    Network->d[SegCourant][0]=1;
-    
-    for (i=1;i<PathLength;i++){
-        Network->x[SegCourant][i]=(double)Path[i][0];
-        Network->y[SegCourant][i]=(double)Path[i][1];
-        Network->z[SegCourant][i]=(double)Path[i][2];
-        Network->d[SegCourant][i]=1;
-	}
-    
-    Network->x[SegCourant][PathLength]=Network->x[SegFin][ElemFin];
-    Network->y[SegCourant][PathLength]=Network->y[SegFin][ElemFin];
-    Network->z[SegCourant][PathLength]=Network->z[SegFin][ElemFin];
-    Network->d[SegCourant][PathLength]=1;
-    
-    
-    //for (i=0;i<=PathLength;i++) printf("%lf %lf %lf\n",Network->x[SegCourant][i],Network->x[SegCourant][i],Network->x[SegCourant][i]);
-    
-    
-    //interpolation des diametres si on a rejoint un autre bout de segment
-    if (TypeFin==2){
-        DiamIni=Network->d[SegIni][ElemIni];
-        DiamFin=Network->d[SegFin][ElemFin];
-        for (i=0;i<Network->NbEl[SegCourant];i++){
-            Network->d[SegCourant][i]=DiamIni+((double)i)/((double)PathLength-1)*(DiamFin-DiamIni);
-		}
-	}
-    
-    //diametre constant si on rejoint un ilot
-    if (TypeFin==1){
-        DiamIni=Network->d[SegIni][ElemIni];
-        for (i=0;i<Network->NbEl[SegCourant];i++){
-            Network->d[SegCourant][i]=DiamIni;
-		}
-	}
-    
-    //diametre constant si on rejoint un segment
-    if (TypeFin==3){
-        DiamIni=Network->d[SegIni][ElemIni];
-        for (i=0;i<Network->NbEl[SegCourant];i++){
-            Network->d[SegCourant][i]=DiamIni;
-		}
-	}
-    
-    //petit lissage des donnees (juste pour le style)
-    
-    TpX=Network->x[SegCourant][0];
-    TpY=Network->y[SegCourant][0];
-    TpZ=Network->z[SegCourant][0];
-    
-    for (i=1;i<Network->NbEl[SegCourant]-1;i++){
-        TpX2=TpX;
-        TpY2=TpY;
-        TpZ2=TpZ;
-        TpX=Network->x[SegCourant][i];
-        TpY=Network->y[SegCourant][i];
-        TpZ=Network->z[SegCourant][i];
-        Network->x[SegCourant][i]=(Network->x[SegCourant][i+1]+TpX2)/2;
-        Network->y[SegCourant][i]=(Network->y[SegCourant][i+1]+TpY2)/2;
-        Network->z[SegCourant][i]=(Network->z[SegCourant][i+1]+TpZ2)/2;
-	}
-    
-    return SegCourant;
-}
-
-
-
-//Dans le cadre de l'algorithme de tensor voting :
-// -> On souhaite perdre 1/e d'energie a la distance 'dista' de l'origine (point O) dans la direction du bout de segment (point A)
-// -> On souhaite de meme par rapport au point A perdre 1/e d'energie au pt B distant de 'dista' de l'origine mais dans une
-//    direction tq (OA,OB)='angl'.
-// -> La taille de la fenetre qui contient le champ de tenseur doit de meme contenir toute l'info pour laquelle l'energie est > 0.01
-//Cette fonction calcule alors 'c', 'sigma' et 'Tfenetre' en fonction de 'dista' et 'angl'.
-void CalcParamStickField(double dista,double angl,double * c,double * sigma,int * Tfenetre){ //TO FULLY TRANSLATE
-    double CourbureRef;
-    
-    //correction des entrees
-    if (angl<2) angl=2;
-    angl=angl*3.14159/180;
-    angl=fabs(angl);
-    dista=fabs(dista);
-    
-    
-    //calcul des coefficients
-    CourbureRef=2*sin(angl)/dista;
-    
-    *c=pow(dista,2)/pow(CourbureRef,2);
-    *sigma=dista;
-    *Tfenetre=2*4.5*dista+1; // le 2*...+1   est fait pour passer d'un 'rayon' a une lg d'arette
-    // le 4.5 est pour que les plus petites valeurs du champ de tenseur soit a 0.01 (en ne tenant TmpCount que de dista)
-    
-    //printf("dist=%lf  angle=%lf  | courbure=%lf | c=%lf  sigma=%lf  Tfenetre=%d\n",dista,angl,CourbureRef,*c,*sigma,*Tfenetre);
-}
-
-
-//Treat the lineset 'Network' using tensor voting (Risser et al, TMI 2008)
-// -> UsingSegments: If UsingSegments==1 then segment ends can be linked to segments  /    not the case otherwise
-// -> dist and angl:
-//  --> An energy loss of 1/e is modeled at a distance 'dista' from the origin (point O) in the direction of the segment end (point A)
-//  --> An energy loss of 1/e is modeled at a distance 'dista' from point O in a direction having an angle 'angl' with OA
-void TensorVoting(Lineset * Network, int UsingSegments,double dista,double angl){
-    int i,j,k;
-    TensorField4TV TF;
-    int CentreX,CentreY,CentreZ;
-    double DirecX,DirecY,DirecZ;
-    unsigned char * SegEndNb;   //by considering each segment end as a node, indicates the number of segments linked to this node
-    int LocElInSegI,LocElInSegJ,WhichSegEndI,WhichSegEndJ;
-    int Test;
-    float ConsideredThresh;
-    int ** ListSegmentEnds;
-    int SizeListSegmentEnds;
-    int * ListIslands;
-    int * ListIslandsToDelete;
-    int SizeListIslands;
-    int TargetType;
-    int TargetId;
-    int SizeSmallSegment,SizeSmallExtremity;
-    double distance;
-    int TopSegment,TopElement;
-    double C,sigma;
-    int BoxSizes;
-    int NBX, NBY, NBZ, CoordMin;
-    int * ListFusions;
-    int NbFusions;
-    int ** Path;
-    int MaxPathLength;
-    int PathLength;
-    
-    
-    
-    // 1 ) INIT
-    
-    printf("Tensor voting launched...\n");
-    
-    // 1.1 ) PARAMETRIZING THE TENSOR VOTING
-    SizeSmallSegment=5;  //size under which a segment with two isolated segment ends is considered as an island
-    
-    SizeSmallExtremity=2; //size under which a free segment end can be joined (must be >=2)
-    
-    ConsideredThresh=0.05;   //when defining a path, this search is stopped if reaching this value in the functional
-    
-    MaxPathLength=100;        //max length of a path between two tokens
-    
-    
-    //calcul en fonction de 'dista' (une distance caracteristique / ex : 3) et 'angl' (un angle caracteristique / ex : 5) :
-    // -> C       : influence de la courbure
-    // -> sigma  : parametrise l'echelle des interactions entre les bouts
-    // -> BoxSizes : taille (arete) des boites dans lesquelles on ecrit le champ de tenseur cree par chaque bout ou ilot
-
-    if ((dista>0)&&(angl>=0)) CalcParamStickField(dista,angl,&C,&sigma,&BoxSizes);
-    else CalcParamStickField(10,45,&C,&sigma,&BoxSizes);
-    
-    cout <<  "dista=" << dista  <<  "    angl=" << angl  << endl;
-    cout <<  "->    C=" << C  <<  "   sigma=" << sigma << "  BoxSizes=" << BoxSizes  << endl;
-
-    
-    // 1.2 ) AUTRES INITIALISATIONS
-    
-    //in case the network in in 2D (z always = 0)
-    for (i=0;i<Network->NbSeg;i++) if (Network->NbEl[i]>0) for (j=0;j<Network->NbEl[i];j++) Network->z[i][j]=Network->z[i][j]+5;
-    
-    
-    // 1.2.a ) DETERMINATION DE LA TAILLE ET CREATION DU CHAMP DE TENSEUR, DU CHAMP DE Functional ET DE L'IMAGE RESEAU
-    
-    // taille de l'image dans laquelle on va mettre le champ de tenseurs
-    NBX=0;
-    NBY=0;
-    NBZ=0;
-    CoordMin=0;
-    for (i=0;i<Network->NbSeg;i++) if (Network->NbEl[i]>0) for (j=0;j<Network->NbEl[i];j++){
-        if ((int)Network->x[i][j]>NBX) NBX=(int)Network->x[i][j];
-        if ((int)Network->y[i][j]>NBY) NBY=(int)Network->y[i][j];
-        if ((int)Network->z[i][j]>NBZ) NBZ=(int)Network->z[i][j];
-        
-        if ((int)Network->x[i][j]<CoordMin) CoordMin=(int)Network->x[i][j];
-        if ((int)Network->y[i][j]<CoordMin) CoordMin=(int)Network->y[i][j];
-        if ((int)Network->z[i][j]<CoordMin) CoordMin=(int)Network->z[i][j];
-	}
-    NBX+=5;
-    NBY+=5;
-    NBZ+=5;
-    
-    if (CoordMin<-2){  //-2 pour avoir une petite marge
-        printf("The network must only have positive coordinates!\n");
-        return;
-	}
-    
-    
-    //initialisation du champ de tenseur
-    InitTensorField4TV(&TF,NBX,NBY,NBZ);
-    
-    
-    // 1.2.b ) ALLOCATION MEMOIRE POUR LES LISTES QUI VONT SUIVRE
-    
-    //liste generale des fusions
-    NbFusions=0;
-    ListFusions=(int*)malloc(4*Network->NbSeg*sizeof(int));  //ListFusions[4*i] = segment du bout 1
-    //ListFusions[4*i+1] = element du segment du bout 1
-    //ListFusions[4*i+2] = segment du bout 2 avec lequel le bout 1 est relie
-    //ListFusions[4*i+3] = element du segment du bout 2 avec lequel le bout 1 est relie
-    for (i=0;i<4*Network->NbSeg;i++) ListFusions[i]=-1;
-    
-    
-    //liste de connectivite des bouts
-    SegEndNb=(unsigned char *)malloc(2*(Network->NbSeg)*sizeof(unsigned char));
-    
-    //liste des bouts isoles
-    ListSegmentEnds=(int**)malloc(2*(Network->NbSeg)*sizeof(int*));
-    for(i=0;i<2*(Network->NbSeg);i++) ListSegmentEnds[i]=(int*)malloc(2*sizeof(int)); //ListSegmentEnds[i][0] = segment etudie
-    //ListSegmentEnds[i][1] = element du segment etudie
-    
-    //liste des bouts isoles
-    ListIslands=(int*)malloc((Network->NbSeg)*sizeof(int));
-    ListIslandsToDelete=(int*)malloc((Network->NbSeg)*sizeof(int));
-    
-    
-    // 1.2.c ) LISTE DE CONNECTIVITE DES BOUTS
-    
-    //suppression des cycles sur un segment
-    for (i=0;i<Network->NbSeg;i++) if (Network->NbEl[i]>2){
-        LocElInSegI=Network->NbEl[i]-1;
-        if ((Network->x[i][LocElInSegI]==Network->x[i][0])&&(Network->y[i][LocElInSegI]==Network->y[i][0])&&(Network->z[i][LocElInSegI]==Network->z[i][0]))
-            Network->NbEl[i]=0;
-	}
-    
-    
-    //detection des bouts seuls - le 2 est du au fait qu'on etudie les deux bout de chaque segment
-    
-    for (i=0;i<Network->NbSeg;i++){
-        SegEndNb[2*i]=0;     //premier point
-        SegEndNb[2*i+1]=0;   //deuxieme point
-	}
-    
-    for (i=0;i<Network->NbSeg-1;i++) if (Network->NbEl[i]!=0) for(WhichSegEndI=0;WhichSegEndI<2;WhichSegEndI++){
-        LocElInSegI=(Network->NbEl[i]-1)*WhichSegEndI;
-        for (j=i+1;j<Network->NbSeg;j++) if (Network->NbEl[j]!=0) for(WhichSegEndJ=0;WhichSegEndJ<2;WhichSegEndJ++){
-            LocElInSegJ=(Network->NbEl[j]-1)*WhichSegEndJ;
-            if (fabs(Network->x[i][LocElInSegI]-Network->x[j][LocElInSegJ])<0.1)
-                if (fabs(Network->y[i][LocElInSegI]-Network->y[j][LocElInSegJ])<0.1)
-                    if (fabs(Network->z[i][LocElInSegI]-Network->z[j][LocElInSegJ])<0.1){
-                        SegEndNb[2*i+WhichSegEndI]++;
-                        SegEndNb[2*j+WhichSegEndJ]++;
-                    }
-		}
-	}
-    
-    
-    // 1.2.d ) CREATIONS DE LA LISTE DES ILOTS
-    
-    SizeListIslands=0;
-    for (i=0;i<Network->NbSeg;i++) if ((Network->NbEl[i]!=0)&&(Network->NbEl[i]<=SizeSmallSegment)) if ((SegEndNb[2*i]==0)&&(SegEndNb[2*i+1]==0)){
-        Test=0;
-        for (j=0;j<Network->NbEl[i];j++) if (Network->d[i][j]>(double)SizeSmallSegment) Test=1;  //c'est pas vraiment un ilot
-        
-        ListIslands[SizeListIslands]=i;
-        ListIslandsToDelete[SizeListIslands]=-1;
-        SizeListIslands++;
-	}
-    
-    
-    // 1.2.e ) CREATION DE LA LISTE DES BOUTS ISOLES	
-    
-    SizeListSegmentEnds=0;
-    for (i=0;i<Network->NbSeg;i++) if (Network->NbEl[i]>=SizeSmallExtremity) for(WhichSegEndI=0;WhichSegEndI<2;WhichSegEndI++) if(SegEndNb[2*i+WhichSegEndI]==0){
-        Test=0;
-        for(j=0;j<SizeListIslands;j++) if (ListIslands[j]==i) Test=1;
-        
-        if (Test==0){
-            ListSegmentEnds[SizeListSegmentEnds][0]=i;
-            ListSegmentEnds[SizeListSegmentEnds][1]=(Network->NbEl[i]-1)*WhichSegEndI;
-            SizeListSegmentEnds++;
-		}
-	}
-    
-    
-    // 1.2.f ) CREATIONS DE LA LISTE CHEMIN D'UN ELEMENT VERS UN AUTRE
-    
-    Path=(int**)malloc(MaxPathLength*sizeof(int*));
-    for (i=0;i<MaxPathLength;i++)
-        Path[i]=(int*)malloc(3*sizeof(int));  //Path[i][0] -> X   |  Path[i][1] -> Y   |  Path[i][2] -> Z
-    
-    
-    // 2 ) CREATION DU CHAMP DE TENSEURS ET CALCUL DE LA Functional
-    
-    printf("Compute the tensor field and the functional\n");
-    
-    // 2.1 ) REMPLISSAGE DU CHAMP DE TENSEURS
-    
-    //we make sure everything is clean
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[0][0].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[1][0].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[2][0].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[0][1].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[1][1].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[2][1].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[0][2].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[1][2].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Field[2][2].image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.Functional.image[i][j][k]=0;
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)    TF.NetworkLabels[i][j][k]=0;
-    
-    
-    //les vaisseaux
-    if (UsingSegments==1) InsertPlateChainFields(&TF,Network,sigma/3,0.2);
-    
-    //les ilots
-    for(i=0;i<SizeListIslands;i++){
-        InsertBallField(&TF,Network,ListIslands,i,sigma,BoxSizes);
-	}
-    
-    //les bouts isoles de vaisseaux
-    InsertAllStickFields(&TF,Network,ListSegmentEnds,SizeListSegmentEnds,C,sigma,BoxSizes);
-  
-  
-    
-    // 2.2 ) Compute the saliency map
-    CptSaliencyMap(&TF);
-    
-    
-    // 3 ) JONCTION DES BOUTS
-    ScalarField CopiedSaliencyMap;
-    CopiedSaliencyMap.CreateVoidField(TF.NBX,TF.NBY,TF.NBZ);
-    for (i=0;i<TF.NBZ;i++) for (j=0;j<TF.NBY;j++) for (k=0;k<TF.NBX;k++)
-        CopiedSaliencyMap.P(TF.Functional.image[i][j][k],k,j,i);
-
-    //CopiedSaliencyMap.Write("SaliencyMap2007.nii");
-    
-    
-    
-    printf("Gap filling\n");
-    //test de ce qu'il y a au bout du chemin cree par la Functional en partant de chaque bout avec jonction si OK
-    for(i=0;i<SizeListSegmentEnds;i++){
-        // 3.1 ) TEST SI UN CHEMIN EXISTE
-        TargetType=-1;
-        TestPath(&TF,Network,ListSegmentEnds,i,ConsideredThresh,&TargetType,&TargetId,Path,MaxPathLength,&PathLength);
-        
-        
-        // 3.2 ) AUTRE BOUT TOUCHE
-        if (TargetType==2){
-            //on recherche le bout correspondant
-            IdentifySegmentEnd(Network,ListSegmentEnds,SizeListSegmentEnds,ListFusions,NbFusions,TargetId,i,&j);
-            
-            if (j!=-1){
-                CreatePath(Network,ListSegmentEnds[i][0],ListSegmentEnds[i][1],ListSegmentEnds[j][0],ListSegmentEnds[j][1],TargetType,Path,PathLength);
-                
-                ListFusions[4*NbFusions]=ListSegmentEnds[i][0];
-                ListFusions[4*NbFusions+1]=ListSegmentEnds[i][1];
-                ListFusions[4*NbFusions+2]=ListSegmentEnds[j][0];
-                ListFusions[4*NbFusions+3]=ListSegmentEnds[j][1];
-                NbFusions++;
-			}
-		}
-        
-        // 3.3 ) ILOT TOUCHE
-        if (TargetType==1){
-            IdentifyIsland(Network,ListIslands,SizeListIslands,ListFusions,NbFusions,TargetId,ListSegmentEnds,i,&TopSegment);
-            
-            //creation du chemin
-            if(TopSegment!=-1){
-                CreatePath(Network,ListSegmentEnds[i][0],ListSegmentEnds[i][1],ListIslands[TopSegment],Network->NbEl[ListIslands[TopSegment]]/2,TargetType,Path,PathLength);
-                
-                ListFusions[4*NbFusions]=ListSegmentEnds[i][0];
-                ListFusions[4*NbFusions+1]=ListSegmentEnds[i][1];
-                ListFusions[4*NbFusions+2]=ListIslands[TopSegment];
-                ListFusions[4*NbFusions+3]=Network->NbEl[ListIslands[TopSegment]]/2;
-                NbFusions++;
-                
-                ListIslandsToDelete[TopSegment]=1;
-			}
-		}
-        
-        // 3.4 ) SEGMENT TOUCHE
-        if (TargetType==3){
-            IdentifySegment(Network,TargetId,Path,PathLength,&TopSegment,&TopElement,ListSegmentEnds,i);
-            //creation du chemin
-            if(TopElement!=-1){
-                CreatePath(Network,ListSegmentEnds[i][0],ListSegmentEnds[i][1],TopSegment,TopElement,TargetType,Path,PathLength);
-			}
-		}
-	}
-    
-    
-    //suppression des ilots rejoints
-    
-    Test=1;
-    for(j=0;j<SizeListIslands;j++) if (ListIslandsToDelete[j]==1){
-        Network->NbEl[ListIslands[j]]=0;
-        Test=0;
-	}
-    
-    if (Test==0) printf("The network might be sligthly improved using another iteration of the algoritm\n");
-    else printf("Finished\n");
-    
-    //in case the network in in 2D (z always = 0)
-    for (i=0;i<2*Network->NbSeg;i++) if (Network->NbEl[i]>0) for (j=0;j<Network->NbEl[i];j++) Network->z[i][j]=Network->z[i][j]-5;
-}
-
-
-
-
-
-
-
 
 /*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
                                             Functions level 1
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
-
-
-
-/// read parameters and perform the orgininal tensor voting strategy from 2008
-void PerformTensorVoting(int argc, char **argv){
-    char NomFicIni[256];
-    char NomFicModif[256];
-    Lineset Network;
-    double seuilFusion;
-    int OptSeg;
-    double LgRef,AnglRef;
-    char OriginalImageName[256];
-    int KnownOriginalImage;
-    ScalarField OriginalImage;
-
-    //read parameters
-    argc--; argv++;
-    strcpy(NomFicIni,argv[1]);
-    argc--; argv++;
-    strcpy(NomFicModif,argv[1]);
-    argc--; argv++;
-    OptSeg=atoi(argv[1]);
-    argc--; argv++;
-    LgRef=atof(argv[1]);
-    argc--; argv++;
-    AnglRef=atof(argv[1]);
-    argc--; argv++;
-    
-    KnownOriginalImage=0;
-    if (argc>1) {
-      KnownOriginalImage=1;
-      strcpy(OriginalImageName,argv[1]);
-      argc--; argv++;
-    }
-    
-    
-    //Read the mv3d file
-    ReadLineset(&Network,NomFicIni);
-        
-    if (KnownOriginalImage==1){
-      OriginalImage.Read(OriginalImageName);
-      Lineset_MillimetersToVoxels(&Network,&OriginalImage);
-    }
-    
-        
-    //perform tensor voting
-    TensorVoting(&Network,OptSeg,LgRef,AnglRef);
-    
-    //Save the transformed network
-    if (KnownOriginalImage==1)
-      Lineset_VoxelsToMillimeters(&Network,&OriginalImage);
-
-    SaveLineset(&Network,NomFicModif);
-}
 
 
 
@@ -3560,15 +1886,6 @@ void usage(){
   cerr << "    -> If the coordinates of the mv3d are in mm and not in voxels, which is the case when using -Skeletonize,\n";
   cerr << "       please give the name of the original image [OriginalImage] so that voxel resolution is known.\n";
   cerr << "\n";
-  cerr << "-TensorVoting2008 [InputLineset][OutputLineset] [Opt] [RefDist][RefAngl] <[OriginalImage]>\n";
-  cerr << "    -> Close the gaps in the .mv3d lineset of [InputFile] using tensor voting. The method of\n";
-  cerr << "       (Risser, Plouraboue and Descombes, TMI 2008) is used and the Result is saved in the .mv3d \n";
-  cerr << "       file [OutputLineset].\n";
-  cerr << "    -> If [Opt]==1, segment-end tokens can be joined to the segments tokens.\n";
-  cerr << "    -> [RefDist] and [RefAngl] are the caracteristic distance (in voxels) and angle (in degrees).\n";
-  cerr << "    -> If the coordinates of the mv3d are in mm and not in voxels (eg. using -Skeletonize), please\n";
-  cerr << "       give the name of the original image so that voxel resolution is known.\n";
-  cerr << "\n";
   cerr << "\n";
   
   exit(1);
@@ -3618,10 +1935,6 @@ int main(int argc, char **argv){
     }
     if (done == false) if (strcmp(argv[1], "-CleanupSkeleton") == 0) {
           CleanupSkeleton(argc,argv);
-          done = true;
-    }
-    if (done == false) if (strcmp(argv[1], "-TensorVoting2008") == 0) {
-          PerformTensorVoting(argc,argv);
           done = true;
     }
     if (done == false) if (strcmp(argv[1], "-TensorVoting") == 0) {

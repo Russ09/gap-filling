@@ -36,7 +36,7 @@ protected:
   virtual void InsertPlateChainAnchors(float);
   virtual void CptSaliencyMap();
   virtual void FillTheGaps();
-  virtual void TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float LengthPathSteps=1, float ConsideredGLThresh=0.05, float NoiseLevel=0);
+  virtual void TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float *PathScore,float LengthPathSteps=1, float ConsideredGLThresh=0.05, float NoiseLevel=0);
   virtual void TestNoisyPaths(int,int *, int *,int *,float);
   virtual void IdentifyAndValidateSegmentAndElement(int,int,int *,int *,int);
   virtual void IdentifyAndValidateSegmentEnd(int,int,int,int *);
@@ -774,7 +774,7 @@ void TensorVoting2::CptSaliencyMap(){
 //  -> 'TargetType' is -1 if nothing is found / 1 if a segment end is found / 2 if a segment is found
 //  -> LengthPathSteps  not be higher than 1 -- In our tests, 1 seems to give optimal results (probably due to the fact that the path should be sufficiently far away from the origin after a few steps
 //  -> ConsideredGLThresh... when defining a path, this search is stopped if reaching this value in the functional
-void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float LengthPathSteps, float ConsideredGLThresh,float NoiseLevel){
+void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float *PathScore,float LengthPathSteps, float ConsideredGLThresh,float NoiseLevel){
     float locX,locY,locZ;
     int TXi,TYi,TZi;
     float TXf,TYf,TZf;
@@ -821,7 +821,7 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
     
     VecNormalize(CurrentDirection,1);
 
-    if ((IniX<0)||(IniX>this->TensField.NX-1)||(IniY<0)||(IniY>this->TensField.NY-1)||(IniZ<0)||(IniZ>this->TensField.NZ-1)) {*PathLength=0; *TargetType=-1; return;}
+    if ((IniX<0)||(IniX>this->TensField.NX-1)||(IniY<0)||(IniY>this->TensField.NY-1)||(IniZ<0)||(IniZ>this->TensField.NZ-1)) {*PathLength=0; *PathScore=0;*TargetType=-1; return;}
     
     *ID_target=-1;
     *TargetType=-1;
@@ -839,12 +839,11 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
     FirstIterations=4;
     IterationsNumber=2;
     
+    if ((locX<1)||(locX>this->TensField.NX-2)||(locY<1)||(locY>this->TensField.NY-2)||(locZ<1)||(locZ>this->TensField.NZ-2)) {*PathLength=0; *PathScore=0;*TargetType=-1; return;}
+    
     while (((this->Functional.G(locX,locY,locZ)>ConsideredGLThresh)||(this->EnhancementField.G(locX,locY,locZ)>ConsideredGLThresh)||(FirstIterations>0))&&(StopSearch==0)){
         
         //2.2.1) Init parameters for the current point
-        
-        if ((locX<0)||(locX>this->TensField.NX-1)||(locY<0)||(locY>this->TensField.NY-1)||(locZ<0)||(locZ>this->TensField.NZ-1)) {*PathLength=0; *TargetType=-1; return;}
-        
         LXi=static_cast<int>(locX+0.5);
         LYi=static_cast<int>(locY+0.5);
         LZi=static_cast<int>(locZ+0.5);
@@ -886,6 +885,8 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
                             *TargetType=1;
                             *ID_target=TempI;
                             *PathLength=IterationsNumber;
+                            *PathScore=0;
+                            for (i=1;i<IterationsNumber;i++) *PathScore+=sqrt(((Path[i][0]-Path[i-1][0])*(Path[i][0]-Path[i-1][0]))+((Path[i][1]-Path[i-1][1])*(Path[i][1]-Path[i-1][1]))+((Path[i][2]-Path[i-1][2])*(Path[i][2]-Path[i-1][2])));
                             return;
                         }
                         if ((TempI>=200000000)&&(TempI<300000000)){ //a segment is reached
@@ -893,6 +894,8 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
                             *TargetType=2;
                             *ID_target=TempI;
                             *PathLength=IterationsNumber;
+                            *PathScore=0;
+                            for (i=1;i<IterationsNumber;i++) *PathScore+=sqrt(((Path[i][0]-Path[i-1][0])*(Path[i][0]-Path[i-1][0]))+((Path[i][1]-Path[i-1][1])*(Path[i][1]-Path[i-1][1]))+((Path[i][2]-Path[i-1][2])*(Path[i][2]-Path[i-1][2])));
                             return;
                         }
                     }
@@ -964,7 +967,7 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
             }  //end of for theta phi loop
         
         //update stuffs on the path search
-        if (ValFoncTop<0){ *PathLength=IterationsNumber; *ID_target=-1; *TargetType=-1; return;}
+        if (ValFoncTop<0){ *PathLength=IterationsNumber; *PathScore=(float)IterationsNumber;*ID_target=-1; *TargetType=-1; return;}
         else{
             locZ+=TopTestedDirection[2]; locY+=TopTestedDirection[1]; locX+=TopTestedDirection[0];
             Path[IterationsNumber][0]=locX; Path[IterationsNumber][1]=locY; Path[IterationsNumber][2]=locZ;
@@ -975,12 +978,16 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
             //cout <<  "Segment end " << this->ListSegmentEnds[IdSegEnd][0] << " (" << this->ListSegmentEnds[IdSegEnd][1] << "): " << locX  << " " << locY  << " " << locZ  << endl;
             FirstIterations--;
             IterationsNumber++;
-            if (IterationsNumber>=this->MaxPathLength) { *PathLength=IterationsNumber; *ID_target=-1; *TargetType=-1; return;}
+            if (IterationsNumber>=this->MaxPathLength) { *PathLength=IterationsNumber; *PathScore=(float)IterationsNumber; *ID_target=-1; *TargetType=-1; return;}
         }
+        
+      if ((locX<1)||(locX>this->TensField.NX-2)||(locY<1)||(locY>this->TensField.NY-2)||(locZ<1)||(locZ>this->TensField.NZ-2)) {*PathLength=0; *PathScore=0; *TargetType=-1; return;}
+      
     }  //end of while loop for path definition
     
     //3) if we're out of the path loop, that means that nothing was reached
     *PathLength=IterationsNumber;
+    *PathScore=(float)IterationsNumber;
     *ID_target=-1;
     *TargetType=-1;
     return;
@@ -995,6 +1002,7 @@ void TensorVoting2::TestPath(int IdSegEnd,int *TargetType, int *ID_target, int *
 void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target, int *PathLength,float PropNoise){
   float ConsideredGLThresh;
   float LengthPathSteps;
+  float PathScore,Best_PathScore;
   float NoiseLevel;
   int NbPathsToTest,NbPathsTested;
   int Best_TargetType;
@@ -1022,10 +1030,10 @@ void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target,
   
   for (NbPathsTested=0; NbPathsTested<NbPathsToTest;NbPathsTested++){
     Tst_TargetType=-1;
-    this->TestPath(IdSegEnd,&Tst_TargetType,&Tst_ID_target,&Tst_PathLength,LengthPathSteps,ConsideredGLThresh,NoiseLevel);
+    this->TestPath(IdSegEnd,&Tst_TargetType,&Tst_ID_target,&Tst_PathLength,&PathScore,LengthPathSteps,ConsideredGLThresh,NoiseLevel);
     
     if ((Tst_TargetType==1)||(Tst_TargetType==2)){ //something is reached
-      if ((Best_PathLength==-1)||(Best_PathLength>Tst_PathLength)){ //no optimal path yet or shorter than the optimal path
+      if ((Best_PathLength==-1)||(Best_PathScore>PathScore)){ //no optimal path yet or better than the optimal path
         //Additional tests here to check whether the path is eligible...
         EligiblePath=1;
         
@@ -1036,8 +1044,6 @@ void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target,
           D1[0]=this->Path[Tst_PathLength-1][0]-this->Path[Tst_PathLength-4][0];
           D1[1]=this->Path[Tst_PathLength-1][1]-this->Path[Tst_PathLength-4][1];
           D1[2]=this->Path[Tst_PathLength-1][2]-this->Path[Tst_PathLength-4][2];
-          
-          
           
           if (this->ListSegmentEnds[IdReachedSegEnd][1]==0){
             D2[0]=this->Network->GetX(this->ListSegmentEnds[IdReachedSegEnd][0],0)-this->Network->GetX(this->ListSegmentEnds[IdReachedSegEnd][0],3);
@@ -1071,6 +1077,7 @@ void TensorVoting2::TestNoisyPaths(int IdSegEnd,int *TargetType, int *ID_target,
           Best_TargetType=Tst_TargetType;
           Best_ID_target=Tst_ID_target;
           Best_PathLength=Tst_PathLength;
+          Best_PathScore=PathScore;
           for (i=0;i<this->MaxPathLength;i++) this->TmpPath[i][0]=this->Path[i][0];
           for (i=0;i<this->MaxPathLength;i++) this->TmpPath[i][1]=this->Path[i][1];
           for (i=0;i<this->MaxPathLength;i++) this->TmpPath[i][2]=this->Path[i][2];
@@ -1325,7 +1332,7 @@ void TensorVoting2::FillTheGaps(){
   for(i=0;i<this->SizeListSegmentEnds;i++){
       //test a path  (the path is stored in this->Path)
       TargetType=-1;
-      //this->TestPath(i,&TargetType,&TargetId,&PathLength);           //to comment for the noisy version of the algorithm
+      //this->TestPath(i,&TargetType,&TargetId,&Path,&PathScore);           //to comment for the noisy version of the algorithm
       this->TestNoisyPaths(i,&TargetType,&TargetId,&PathLength,0.2);     //to uncomment for the noisy version of the algorithm
       
       //a segment end is reached

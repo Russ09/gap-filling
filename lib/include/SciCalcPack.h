@@ -1529,7 +1529,7 @@ public:
   ///[Point 1: x]\t[Point 1: y]\t[Point 1:  z]\t[Point 1:  Val]
   ///[Point 2: x]\t[Point 2: y]\t[Point 2:  z]\t[Point 2:  Val]
   ///...
-  virtual void Read(char *,int withValues=0);
+  virtual void Read(char *,int withValues);
   
   ///read the LDMK_Points as the non-null values of a scalar field
   virtual void ReadInScalarField(ScalarField * img3d);

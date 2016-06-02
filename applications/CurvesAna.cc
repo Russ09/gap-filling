@@ -1522,7 +1522,7 @@ void TensorVoting2Launcher(int argc, char **argv){
     
     
     if (KnownNonNullGL==1)
-      Islands.Read(IslandsFileName);  //Islands is already initiated as a void LDMK_Points so no need for a 'else'
+      Islands.Read(IslandsFileName,1);  //Islands is already initiated as a void LDMK_Points so no need for a 'else'
     
     if (KnownOriginalImage==1){
       OriginalImage.Read(OriginalImageName);
